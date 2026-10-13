@@ -91,13 +91,13 @@ def finalize(
     agent = _with_current_datetime(agent, launched_at)
     if load_memory:
         agent = _with_load_memory(agent)
-    agent = _apply_acp_skill_sourcing(agent, runtime.acp_skill_sourcing)
     appended = (additions.system_message_suffix_append or "") if additions else ""
     for suffix in (appended, *extra_suffixes):
         if suffix.strip():
             agent = _append_system_message_suffix(agent, suffix.strip())
     if additions and additions.skills:
         agent = _with_launch_skills(agent, additions.skills)
+    agent = _apply_acp_skill_sourcing(agent, runtime.acp_skill_sourcing)
     if managed_secrets:
         agent = _without_context_secrets(agent, managed_secrets)
     if client_tools:
@@ -201,7 +201,11 @@ def _with_launch_skills(agent: AgentBase, skills: Sequence[Skill]) -> AgentBase:
     """Add launch-supplied skills; the agent's own skills and deny-list win."""
     context = _context_of(agent)
     taken = {skill.name for skill in context.skills} | set(context.disabled_skills)
-    added = [skill for skill in skills if skill.name not in taken]
+    added: list[Skill] = []
+    for skill in skills:
+        if skill.name not in taken:
+            added.append(skill)
+            taken.add(skill.name)
     if not added:
         return agent
     return agent.model_copy(
