@@ -81,6 +81,7 @@ class AgentLaunchAdditions(BaseModel):
     )
     skills: list[Skill] | None = Field(
         default=None,
+        exclude_if=lambda value: value is None,
         description=(
             "Deployment-supplied skills merged into the resolved agent's "
             "context. For a client that ships its own skill catalog and so "

@@ -266,6 +266,28 @@ async def test_the_host_forwards_its_memory_preference_and_no_llm_override(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("existing", [False, True])
+async def test_suffix_only_launch_omits_unused_skills(tmp_path, monkeypatch, existing):
+    request = StartConversationRequest(
+        workspace=LocalWorkspace(working_dir="/workspace"),
+        agent=Agent(llm=LLM(model="test")),
+        agent_launch_additions=AgentLaunchAdditions(
+            system_message_suffix_append="Deployment context",
+        ),
+    )
+
+    payload, _, _ = await _forward(
+        request, config(tmp_path, monkeypatch), existing=existing
+    )
+
+    assert "skills" not in payload["agent_launch_additions"]
+    assert (
+        payload["agent_launch_additions"]["system_message_suffix_append"]
+        == "Deployment context"
+    )
+
+
+@pytest.mark.asyncio
 async def test_an_existing_conversation_is_not_resolved_again(tmp_path, monkeypatch):
     runtime_config = config(tmp_path, monkeypatch)
     request = StartConversationRequest(

@@ -254,3 +254,9 @@ class TestLaunchSkills:
 
     def test_the_field_defaults_to_none(self):
         assert AgentLaunchAdditions().skills is None
+
+    def test_unused_skills_are_omitted_from_existing_launch_payloads(self):
+        additions = AgentLaunchAdditions(system_message_suffix_append=_RUNTIME_SERVICES)
+
+        assert "skills" not in additions.model_dump(mode="json")
+        assert "skills" not in additions.model_dump()
