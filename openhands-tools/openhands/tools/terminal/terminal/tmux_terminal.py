@@ -21,6 +21,7 @@ from openhands.tools.terminal.env import (
 )
 from openhands.tools.terminal.metadata import CmdOutputMetadata
 from openhands.tools.terminal.terminal import TerminalInterface
+from openhands.tools.terminal.terminal.bounded_tmux import BoundedTmuxServer
 from openhands.tools.terminal.terminal.interface import parse_ctrl_key
 
 
@@ -123,7 +124,7 @@ class TmuxTerminal(TerminalInterface):
         env.setdefault("GIT_PAGER", "cat")
         env.setdefault("PAGER", "cat")
         # Never reuse a socket: tmux numeric IDs restart at zero after server exit.
-        self.server = libtmux.Server(
+        self.server = BoundedTmuxServer(
             socket_name=f"{TMUX_SOCKET_NAME}-{uuid.uuid4().hex}", environment=env
         )
         _shell_command = "/bin/bash"

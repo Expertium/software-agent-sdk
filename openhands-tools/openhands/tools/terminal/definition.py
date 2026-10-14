@@ -1,11 +1,12 @@
 """Execute shell commands in a persistent terminal session."""
 
+import math
 import os
 import platform
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationInfo, model_validator
 
 
 if TYPE_CHECKING:
@@ -24,8 +25,10 @@ from openhands.sdk.tool import (
 )
 from openhands.sdk.utils import maybe_truncate
 from openhands.tools.terminal.constants import (
+    DEFAULT_COMMAND_TIMEOUT_SECONDS,
     MAX_CMD_OUTPUT_SIZE,
-    NO_CHANGE_TIMEOUT_SECONDS,
+    MAX_COMMAND_TIMEOUT_SECONDS,
+    MIN_COMMAND_TIMEOUT_SECONDS,
 )
 from openhands.tools.terminal.descriptions import (
     UNIX_TOOL_DESCRIPTION,
@@ -103,11 +106,45 @@ class TerminalAction(Action):
         default=False,
         description="If True, the command is an input to the running process. If False, the command is executed in the terminal session. Default is False.",  # noqa
     )
-    timeout: float | None = Field(
-        default=None,
-        ge=0,
-        description=f"Optional. Sets a maximum time limit (in seconds) for running the command. If the command takes longer than this limit, you’ll be asked whether to continue or stop it. If you don’t set a value, the command will instead pause and ask for confirmation when it produces no new output for {NO_CHANGE_TIMEOUT_SECONDS} seconds. Use a higher value if the command is expected to take a long time (like installation or testing), or if it has a known fixed duration (like sleep).",  # noqa
+    timeout: float = Field(
+        default=DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        ge=MIN_COMMAND_TIMEOUT_SECONDS,
+        le=MAX_COMMAND_TIMEOUT_SECONDS,
+        allow_inf_nan=False,
+        description=(
+            "Maximum time in seconds to wait for this terminal action, including "
+            f"waiting for a terminal session. Must be between "
+            f"{MIN_COMMAND_TIMEOUT_SECONDS:g} and "
+            f"{MAX_COMMAND_TIMEOUT_SECONDS:g} seconds. Defaults to "
+            f"{DEFAULT_COMMAND_TIMEOUT_SECONDS:g} seconds."
+        ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_persisted_timeout(
+        cls, value: Any, info: ValidationInfo
+    ) -> Any:
+        if not (
+            isinstance(value, dict)
+            and info.context
+            and info.context.get("persisted_event")
+        ):
+            return value
+        timeout = value.get("timeout")
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+        ):
+            timeout = DEFAULT_COMMAND_TIMEOUT_SECONDS
+        value = value.copy()
+        value["timeout"] = min(
+            MAX_COMMAND_TIMEOUT_SECONDS,
+            max(MIN_COMMAND_TIMEOUT_SECONDS, timeout),
+        )
+        return value
+
     reset: bool = Field(
         default=False,
         description="If True, reset the terminal by creating a new session. Use this only when the terminal becomes unresponsive. Note that all previously set environment variables and session state will be lost after reset. Cannot be used with is_input=True.",  # noqa
@@ -272,7 +309,8 @@ class TerminalTool(ToolDefinition[TerminalAction, TerminalObservation]):
         "Run shell commands in a persistent terminal session."
     )
 
-    def declared_resources(self, action: Action) -> DeclaredResources:  # noqa: ARG002
+    def declared_resources(self, action: Action) -> DeclaredResources:
+        assert isinstance(action, TerminalAction)
         # When using the tmux backend, TmuxPanePool handles concurrency
         # internally via pane-level isolation — opt out of framework
         # serialization so parallel calls are allowed.
@@ -280,8 +318,20 @@ class TerminalTool(ToolDefinition[TerminalAction, TerminalObservation]):
         # session, so we declare a resource key to serialize terminal
         # calls against each other without blocking unrelated tools.
         if getattr(self.executor, "is_pooled", False):
-            return DeclaredResources(keys=(), declared=True)
-        return DeclaredResources(keys=("terminal:session",), declared=True)
+            return DeclaredResources(keys=(), declared=True, timeout=action.timeout)
+        return DeclaredResources(
+            keys=("terminal:session",), declared=True, timeout=action.timeout
+        )
+
+    def companion_tools(self) -> list[ToolDefinition]:
+        if self.executor is None or not callable(
+            getattr(self.executor, "recover", None)
+        ):
+            return []
+
+        from openhands.tools.terminal.recovery import TerminalRecoverTool
+
+        return TerminalRecoverTool.create(terminal_executor=self.executor)
 
     @classmethod
     def create(
@@ -340,22 +390,22 @@ class TerminalTool(ToolDefinition[TerminalAction, TerminalObservation]):
             else UNIX_TOOL_DESCRIPTION
         )
 
-        # Initialize the parent ToolDefinition with the executor
-        return [
-            cls(
-                action_type=TerminalAction,
-                observation_type=TerminalObservation,
-                description=tool_description,
-                annotations=ToolAnnotations(
-                    title="terminal",
-                    readOnlyHint=False,
-                    destructiveHint=True,
-                    idempotentHint=False,
-                    openWorldHint=True,
-                ),
-                executor=executor,
-            )
-        ]
+        # Initialize the terminal and its out-of-band recovery tool together.
+        terminal = cls(
+            action_type=TerminalAction,
+            observation_type=TerminalObservation,
+            description=tool_description,
+            annotations=ToolAnnotations(
+                title="terminal",
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+            executor=executor,
+        )
+
+        return [terminal]
 
 
 # Automatically register the tool when this module is imported

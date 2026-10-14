@@ -19,6 +19,12 @@ from openhands.sdk.utils.path import posix_path_name
 
 logger = get_logger(__name__)
 
+
+def _load_persisted_event(payload: str) -> Event:
+    """Load an event while allowing persisted terminal actions from older schemas."""
+    return Event.model_validate_json(payload, context={"persisted_event": True})
+
+
 LOCK_FILE_NAME = ".eventlog.lock"
 LOCK_TIMEOUT_SECONDS = 30
 
@@ -164,7 +170,7 @@ class EventLog(EventsListBase):
         txt = self._fs.read(path)
         if not txt:
             raise FileNotFoundError(f"Missing event file: {path}")
-        evt = Event.model_validate_json(txt)
+        evt = _load_persisted_event(txt)
         self._event_cache[i] = evt
         return evt
 
@@ -177,7 +183,7 @@ class EventLog(EventsListBase):
             txt = self._fs.read(self._path(i))
             if not txt:
                 continue
-            evt = Event.model_validate_json(txt)
+            evt = _load_persisted_event(txt)
             evt_id = evt.id
             if i not in self._idx_to_id:
                 self._idx_to_id[i] = evt_id

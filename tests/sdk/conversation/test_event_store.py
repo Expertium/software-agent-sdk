@@ -1,6 +1,9 @@
 """Comprehensive edge case tests for EventLog class."""
 
 import json
+import subprocess
+import sys
+import textwrap
 from unittest.mock import Mock
 
 import pytest
@@ -15,6 +18,82 @@ from openhands.sdk.event.llm_convertible import MessageEvent
 from openhands.sdk.io.memory import InMemoryFileStore
 from openhands.sdk.llm import Message, TextContent
 from openhands.sdk.utils.path import posix_path_name
+
+
+@pytest.mark.parametrize(
+    ("legacy_timeout", "expected_timeout"),
+    [(420, 300), (1800, 300), (1, 5), (None, 15)],
+)
+def test_event_log_normalizes_legacy_terminal_timeouts_without_rewriting(
+    legacy_timeout: float | None,
+    expected_timeout: float,
+):
+    from openhands.sdk.event.llm_convertible import ActionEvent
+    from openhands.sdk.llm import MessageToolCall
+    from openhands.tools.terminal import TerminalAction
+
+    fs = InMemoryFileStore()
+    event = ActionEvent(
+        thought=[TextContent(text="Run a command")],
+        action=TerminalAction(command="echo ready"),
+        tool_name="terminal",
+        tool_call_id="call-1",
+        tool_call=MessageToolCall(
+            id="call-1",
+            name="terminal",
+            arguments='{"command":"echo ready"}',
+            origin="completion",
+        ),
+        llm_response_id="response-1",
+    )
+    payload = json.loads(event.model_dump_json(exclude_none=True))
+    payload["action"]["timeout"] = legacy_timeout
+    event_path = "events/" + EVENT_FILE_PATTERN.format(idx=0, event_id=event.id)
+    raw_json = json.dumps(payload)
+    fs.write(event_path, raw_json)
+
+    log = EventLog(fs)
+    restored = log[0]
+
+    assert isinstance(restored, ActionEvent)
+    assert isinstance(restored.action, TerminalAction)
+    assert restored.action.timeout == expected_timeout
+    assert json.loads(fs.read(event_path))["action"]["timeout"] == legacy_timeout
+
+
+def test_event_log_loads_terminal_recover_observation_in_fresh_process(tmp_path):
+    from openhands.sdk.event.llm_convertible import ObservationEvent
+    from openhands.tools.terminal import TerminalRecoverObservation
+
+    event = ObservationEvent(
+        observation=TerminalRecoverObservation.from_text(text="recovered"),
+        action_id="action-1",
+        tool_name="terminal_recover",
+        tool_call_id="call-1",
+    )
+    events_dir = tmp_path / "events"
+    events_dir.mkdir()
+    (events_dir / EVENT_FILE_PATTERN.format(idx=0, event_id=event.id)).write_text(
+        event.model_dump_json(exclude_none=True)
+    )
+
+    script = textwrap.dedent(
+        """
+        import sys
+        import openhands.tools.terminal  # noqa: F401
+        from openhands.sdk.conversation.event_store import EventLog
+        from openhands.sdk.io.local import LocalFileStore
+
+        restored = EventLog(LocalFileStore(sys.argv[1]))[0]
+        assert type(restored.observation).__name__ == "TerminalRecoverObservation"
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def create_test_event(event_id: str, content: str = "Test content") -> MessageEvent:

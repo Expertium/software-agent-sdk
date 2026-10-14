@@ -28,6 +28,7 @@ from openhands.tools.terminal.env import (
     build_terminal_env,
     normalize_terminal_env,
 )
+from openhands.tools.terminal.terminal.bounded_tmux import BoundedTmuxServer
 from openhands.tools.terminal.terminal.tmux_terminal import TmuxTerminal
 
 
@@ -119,7 +120,7 @@ class TmuxPanePool:
 
         env = build_terminal_env(self.env)
         # Stale handles must not reach another pool after tmux restarts.
-        self._server = libtmux.Server(
+        self._server = BoundedTmuxServer(
             socket_name=f"{TMUX_SOCKET_NAME}-{uuid.uuid4().hex}", environment=env
         )
         session_name = f"openhands-pool-{self.username}-{uuid.uuid4()}"

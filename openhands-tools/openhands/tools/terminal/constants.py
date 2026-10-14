@@ -20,12 +20,17 @@ MAX_CMD_OUTPUT_SIZE: Final[int] = 30000
 
 # Common timeout message that can be used across different timeout scenarios
 TIMEOUT_MESSAGE_TEMPLATE: Final[str] = (
-    "You may wait longer to see additional output by sending empty command '', "
-    "send other commands to interact with the current process, send keys "
-    '("C-c", "C-z", "C-d") '
-    "to interrupt/kill the previous command before sending your new command, "
-    "or use the timeout parameter in terminal for future commands."
+    "Every terminal action has a bounded timeout (default 15 seconds; "
+    "allowed range 5-300 seconds). You may wait longer to see additional output "
+    'by sending an empty command, or send keys ("C-c", "C-z", "C-d") '
+    "to interrupt the previous command. If the terminal stops responding or "
+    "reports a terminal lock timeout, call `terminal_recover` to interrupt and "
+    "replace the terminal session; then retry any command that did not complete."
 )
+
+DEFAULT_COMMAND_TIMEOUT_SECONDS: Final[float] = 15.0
+MIN_COMMAND_TIMEOUT_SECONDS: Final[float] = 5.0
+MAX_COMMAND_TIMEOUT_SECONDS: Final[float] = 300.0
 
 # How long to wait with no new output before considering it a no-change timeout
 NO_CHANGE_TIMEOUT_SECONDS: Final[int] = 30

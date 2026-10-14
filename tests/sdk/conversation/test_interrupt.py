@@ -335,6 +335,59 @@ async def test_cancel_token_stays_observable_after_interrupt(tmp_path):
     await asyncio.wait_for(resumed, timeout=2.0)
 
 
+@pytest.mark.asyncio
+async def test_tool_task_cancellation_returns_error_without_cancelling_arun(tmp_path):
+    """Cancelling one tool task must not be treated as a conversation pause."""
+    from openhands.sdk.agent.parallel_executor import ParallelToolExecutor
+    from openhands.sdk.tool.tool import DeclaredResources
+
+    executor = ParallelToolExecutor(max_workers=1)
+    action = _make_action_event("my_tool", "tc-cancel")
+    started = threading.Event()
+    release = threading.Event()
+    interrupted = threading.Event()
+
+    class Tool:
+        name = "my_tool"
+        executor = None
+
+        def declared_resources(self, _action):
+            return DeclaredResources(keys=(), declared=True)
+
+    class Executor:
+        def interrupt(self):
+            interrupted.set()
+            release.set()
+
+    tool = Tool()
+    tool.executor = Executor()
+
+    def tool_runner(_action):
+        started.set()
+        release.wait(timeout=2)
+        return []
+
+    task = asyncio.create_task(
+        executor.aexecute_batch(
+            [action],
+            tool_runner,
+            tools={"my_tool": tool},
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 1)
+    task.cancel()
+
+    try:
+        result = await asyncio.wait_for(task, timeout=2)
+    except asyncio.CancelledError:
+        pytest.fail("Tool cancellation propagated to the agent run")
+
+    assert interrupted.is_set()
+    assert len(result) == 1
+    assert isinstance(result[0][0], AgentErrorEvent)
+    assert "cancelled" in result[0][0].error.lower()
+
+
 # ── ParallelToolExecutor cancellation tests ───────────────────────────
 
 

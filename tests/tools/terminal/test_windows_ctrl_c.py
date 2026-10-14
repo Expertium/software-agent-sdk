@@ -82,7 +82,7 @@ def test_windows_ctrl_c_interrupt_kills_child_process(tmp_path) -> None:
         child_pid = int(pid_path.read_text(encoding="utf-8").strip())
         assert psutil.pid_exists(child_pid)
 
-        session.execute(TerminalAction(command="C-c", is_input=True, timeout=3))
+        session.execute(TerminalAction(command="C-c", is_input=True, timeout=5))
 
         child_exited = _wait_for_child_exit(child_pid)
     finally:
