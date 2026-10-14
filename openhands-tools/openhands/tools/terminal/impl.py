@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Literal
 
 from libtmux.exc import LibTmuxException, TmuxObjectDoesNotExist
 
+from openhands.sdk.conversation.resource_lock_manager import action_timeout
 from openhands.sdk.llm import TextContent
 from openhands.sdk.logger import get_logger
 from openhands.sdk.tool import ToolExecutor
@@ -95,7 +96,9 @@ class TerminalExecutor(ToolExecutor[TerminalAction, TerminalObservation]):
         self._working_dir = working_dir
         self._username = username
         self._no_change_timeout_seconds = no_change_timeout_seconds
-        self._terminal_type = terminal_type
+        self._terminal_type: Literal["tmux", "subprocess", "powershell"] | None = (
+            terminal_type
+        )
         self._env = normalize_terminal_env(env)
         self._max_panes = max_panes
         self.full_output_save_dir: str | None = full_output_save_dir
@@ -166,6 +169,38 @@ class TerminalExecutor(ToolExecutor[TerminalAction, TerminalObservation]):
             with self._sessions_lock:
                 self._sessions.clear()
             self._initialize_pool()
+
+    def recover(self, reason: str = "Terminal is unresponsive") -> str:
+        """Interrupt in-flight commands and replace the terminal session."""
+        with self._pool_recovery_lock:
+            self.interrupt()
+            if self._pool is not None:
+                with suppress(Exception):
+                    self._pool.close()
+                with self._sessions_lock:
+                    self._sessions.clear()
+                self._pool = None
+                self._initialize_pool()
+            else:
+                if self._session is not None:
+                    with suppress(Exception):
+                        self._session.close()
+                self._session = create_terminal_session(
+                    work_dir=self._working_dir,
+                    username=self._username,
+                    no_change_timeout_seconds=self._no_change_timeout_seconds,
+                    terminal_type=self._terminal_type,
+                    shell_path=self.shell_path,
+                    env=self._env,
+                )
+                self._session.initialize()
+
+        return (
+            f"Terminal session recovered: {reason}. Running terminal commands were "
+            "interrupted and the shell was replaced. Shell environment variables "
+            "and working-directory changes have been cleared. Verify the effects "
+            "of interrupted commands before retrying them."
+        )
 
     @staticmethod
     def _tmux_pool_recovery_observation(
@@ -483,7 +518,7 @@ class TerminalExecutor(ToolExecutor[TerminalAction, TerminalObservation]):
         pool = self._pool
         assert pool is not None
         try:
-            with pool.pane() as handle:
+            with pool.pane(timeout=action.timeout) as handle:
                 reset_text: str | None = None
 
                 if action.reset or handle.terminal._closed:
@@ -573,9 +608,9 @@ class TerminalExecutor(ToolExecutor[TerminalAction, TerminalObservation]):
                     exit_code=None,
                 )
 
-        if self._pool is not None:
-            return self._execute_pooled(action, conversation)
-        else:
+        with action_timeout(action.timeout):
+            if self._pool is not None:
+                return self._execute_pooled(action, conversation)
             return self._execute_single_session(action, conversation)
 
     def interrupt(self) -> None:

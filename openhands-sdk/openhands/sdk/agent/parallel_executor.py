@@ -25,7 +25,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from openhands.sdk.conversation.cancellation import CancellationToken
-from openhands.sdk.conversation.resource_lock_manager import ResourceLockManager
+from openhands.sdk.conversation.resource_lock_manager import (
+    ResourceLockManager,
+    action_timeout,
+)
 from openhands.sdk.event.error_classification import (
     AGENT_OUTCOME,
     ErrorClassification,
@@ -305,10 +308,12 @@ class ParallelToolExecutor:
 
             resources = self._extract_declared_resources(action, tool)
             lock_keys = self._resolve_lock_keys(resources, tool)
-            if not lock_keys:
-                return tool_runner(action)
-            with self._lock_manager.lock(*lock_keys):
-                return tool_runner(action)
+            lock_timeout = resources.timeout if resources is not None else None
+            with action_timeout(lock_timeout):
+                if not lock_keys:
+                    return tool_runner(action)
+                with self._lock_manager.lock(*lock_keys, timeout=lock_timeout):
+                    return tool_runner(action)
 
         except ValueError as e:
             logger.info(f"Tool error in '{action.tool_name}': {e}")

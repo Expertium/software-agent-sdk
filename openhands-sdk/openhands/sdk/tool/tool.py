@@ -278,6 +278,7 @@ class DeclaredResources:
 
     keys: tuple[str, ...]
     declared: bool
+    timeout: float | None = None
 
 
 class ToolExecutor[ActionT, ObservationT](ABC):
@@ -423,6 +424,10 @@ class ToolDefinition[ActionT, ObservationT](DiscriminatedUnionMixin, ABC):
     def is_usable(cls) -> bool:
         """Return whether the tool can be used in the current environment."""
         return True
+
+    def companion_tools(self) -> Sequence["ToolDefinition"]:
+        """Create runtime helper tools that share this tool's executor."""
+        return ()
 
     @classmethod
     @abstractmethod

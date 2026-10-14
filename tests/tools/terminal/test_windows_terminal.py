@@ -3,6 +3,7 @@
 import os
 import platform
 import tempfile
+import time
 import uuid
 from collections.abc import Generator
 from typing import cast
@@ -41,6 +42,31 @@ def windows_session(temp_dir: str) -> Generator[TerminalSession]:
         yield session
     finally:
         session.close()
+
+
+def test_windows_close_terminates_shell_and_reader(windows_session):
+    terminal = windows_session.terminal
+    process = terminal.process
+    reader = terminal.reader_thread
+
+    assert process is not None
+    assert reader is not None
+    terminal.send_keys(
+        (
+            "python -c \"import time; print('child ' + 'ready', flush=True); "
+            'time.sleep(10)"'
+        ),
+        enter=True,
+    )
+    deadline = time.monotonic() + 3.0
+    while "child ready" not in terminal.read_screen() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert "child ready" in terminal.read_screen()
+
+    windows_session.close()
+
+    assert process.poll() is not None
+    assert not reader.is_alive()
 
 
 @pytest.fixture
@@ -82,6 +108,20 @@ def test_forced_windows_backend_uses_powershell(temp_dir: str) -> None:
         assert session.terminal.is_powershell()
     finally:
         session.close()
+
+
+def test_recovery_replaces_power_shell_and_accepts_commands(terminal_executor):
+    terminal = terminal_executor.session.terminal
+    old_process = terminal.process
+
+    result = terminal_executor.recover("regression test")
+
+    assert old_process is not None
+    assert old_process.poll() is not None
+    assert "regression test" in result
+    observation = terminal_executor(TerminalAction(command='Write-Output "recovered"'))
+    assert observation.exit_code == 0
+    assert "recovered" in observation.text
 
 
 def test_basic_command_execution(windows_session) -> None:

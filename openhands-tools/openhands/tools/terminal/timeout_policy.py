@@ -1,5 +1,6 @@
 """Runtime-idle-aware terminal timeout policy."""
 
+import math
 import os
 from collections.abc import Mapping
 
@@ -26,7 +27,7 @@ def get_runtime_idle_timeout_seconds(
     except ValueError:
         return None
 
-    if value <= 0:
+    if not math.isfinite(value) or value <= 0:
         return None
     return value
 
@@ -66,9 +67,8 @@ def foreground_timeout_rejection_message(
         f"commands are capped at {ratio_percent}% of that threshold, currently "
         f"{format_seconds(max_timeout)}s, so commands can return control before "
         "the runtime is considered idle.\n\n"
-        "For long-running work, use a shorter timeout, omit the timeout to use "
-        "the terminal soft-timeout/polling flow, or start the command in the "
-        "background and poll its log file."
+        "For long-running work, use a shorter bounded timeout and start the "
+        "command in the background, then poll its log file."
     )
 
 
@@ -80,7 +80,7 @@ def foreground_timeout_rejection_for(
     runtime_idle_timeout_seconds: float | None = None,
 ) -> str | None:
     """Return a rejection message if a terminal action is unsafe to run."""
-    if is_input or not command.strip() or timeout is None:
+    if is_input or not command.strip():
         return None
 
     idle_timeout = (

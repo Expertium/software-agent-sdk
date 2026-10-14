@@ -461,6 +461,40 @@ def test_ctrl_c(terminal_type):
     session.close()
 
 
+def test_action_deadline_includes_initial_screen_read(monkeypatch):
+    class SlowReadTerminal(session_module.TerminalInterface):
+        def send_keys(self, text: str, enter: bool = True) -> None:
+            raise AssertionError("command should not be sent after deadline")
+
+        def is_powershell(self) -> bool:
+            return False
+
+        def clear_screen(self) -> None:
+            pass
+
+    session = session_module.TerminalSession(
+        terminal=SlowReadTerminal(work_dir=os.getcwd())
+    )
+    session._initialized = True
+    monotonic_value = [0.0]
+
+    def monotonic() -> float:
+        return monotonic_value[0]
+
+    def advance_during_read() -> str:
+        monotonic_value[0] += 5.1
+        return ""
+
+    terminal = session.terminal
+    monkeypatch.setattr(terminal, "read_screen", advance_during_read)
+    monkeypatch.setattr(session_module.time, "monotonic", monotonic)
+
+    observation = session.execute(TerminalAction(command="echo test", timeout=5))
+
+    assert session.prev_status == TerminalCommandStatus.HARD_TIMEOUT
+    assert "timed out after 5 seconds" in observation.text
+
+
 @parametrize_terminal_types
 def test_empty_command_error(terminal_type):
     session = create_terminal_session(work_dir=os.getcwd(), terminal_type=terminal_type)

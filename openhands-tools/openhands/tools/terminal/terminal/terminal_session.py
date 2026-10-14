@@ -5,6 +5,7 @@ import time
 import uuid
 from enum import Enum
 
+from openhands.sdk.conversation.resource_lock_manager import action_timeout
 from openhands.sdk.logger import get_logger
 from openhands.sdk.utils import maybe_truncate
 from openhands.tools.terminal.constants import (
@@ -482,6 +483,10 @@ class TerminalSession(TerminalSessionBase):
 
     def execute(self, action: TerminalAction) -> TerminalObservation:
         """Execute a command using the terminal backend."""
+        with action_timeout(action.timeout):
+            return self._execute_with_deadline(action)
+
+    def _execute_with_deadline(self, action: TerminalAction) -> TerminalObservation:
         if not self._initialized:
             raise RuntimeError("Unified session is not initialized")
 
@@ -541,7 +546,7 @@ class TerminalSession(TerminalSessionBase):
                 command=command,
                 is_error=True,
             )
-
+        start_time = time.monotonic()
         # Get initial state before sending command
         initial_terminal_output = self.terminal.read_screen()
         initial_ps1_matches = CmdOutputMetadata.matches_ps1_metadata(
@@ -553,9 +558,15 @@ class TerminalSession(TerminalSessionBase):
             "Initial terminal output (content_length=%s)",
             len(initial_terminal_output),
         )
+        if time.monotonic() - start_time >= action.timeout:
+            return self._handle_hard_timeout_command(
+                command,
+                terminal_content=initial_terminal_output,
+                ps1_matches=initial_ps1_matches,
+                timeout=action.timeout,
+            )
 
-        start_time = time.time()
-        last_change_time = start_time
+        last_change_time = time.time()
         last_terminal_output = initial_terminal_output
 
         # When prev command is still running, and we are trying to send a new command
@@ -660,6 +671,18 @@ class TerminalSession(TerminalSessionBase):
 
         # Loop until the command completes or times out
         while True:
+            remaining = action.timeout - (time.monotonic() - start_time)
+            if remaining <= 0:
+                stripped_output = self._strip_boundary_wrapper(last_terminal_output)
+                return self._handle_hard_timeout_command(
+                    command,
+                    terminal_content=stripped_output,
+                    ps1_matches=CmdOutputMetadata.matches_ps1_metadata(stripped_output),
+                    timeout=action.timeout,
+                    echoed_command=(
+                        command_to_send if command_boundary_marker is not None else None
+                    ),
+                )
             _start_time = time.time()
             logger.debug(f"GETTING TERMINAL CONTENT at {_start_time}")
             cur_terminal_output = self.terminal.read_screen()
@@ -720,18 +743,14 @@ class TerminalSession(TerminalSessionBase):
 
             # Timeout checks should only trigger if a new prompt hasn't appeared yet.
 
-            # 2) Execution timed out since there's no change in output
-            # for a while (NO_CHANGE_TIMEOUT_SECONDS)
-            # We ignore this if the command is *blocking*
+            # 2) Return control when output has been idle without ending the command.
             time_since_last_change = time.time() - last_change_time
-            is_blocking = action.timeout is not None
             logger.debug(
                 f"CHECKING NO CHANGE TIMEOUT ({self.no_change_timeout_seconds}s): "
-                f"elapsed {time_since_last_change}. Action blocking: {is_blocking}"
+                f"elapsed {time_since_last_change}"
             )
             if (
-                not is_blocking
-                and self.no_change_timeout_seconds is not None
+                self.no_change_timeout_seconds is not None
                 and time_since_last_change >= self.no_change_timeout_seconds
             ):
                 stripped_output = self._strip_boundary_wrapper(cur_terminal_output)
@@ -747,12 +766,12 @@ class TerminalSession(TerminalSessionBase):
 
             # 3) Execution timed out since the command has been running for too long
             # (hard timeout)
-            elapsed_time = time.time() - start_time
+            elapsed_time = time.monotonic() - start_time
             logger.debug(
                 f"CHECKING HARD TIMEOUT ({action.timeout}s): elapsed {elapsed_time:.2f}"
             )
             if action.timeout is not None:
-                time_since_start = time.time() - start_time
+                time_since_start = time.monotonic() - start_time
                 if time_since_start >= action.timeout:
                     stripped_output = self._strip_boundary_wrapper(cur_terminal_output)
                     obs = self._handle_hard_timeout_command(
