@@ -74,31 +74,17 @@ class ResolvedLaunch:
 AgentProfileSource = UUID | OpenHandsAgentProfile | ACPAgentProfile
 
 
-def resolve(
-    source: AgentProfileSource,
-    stores: LaunchStores,
-    *,
-    llm_profile_ref: str | None = None,
-) -> ResolvedLaunch:
-    """Resolve a stored profile id or an inline profile into a ``ResolvedLaunch``.
+def resolve(source: AgentProfileSource, stores: LaunchStores) -> ResolvedLaunch:
+    """Resolve a stored profile id or a profile into a ``ResolvedLaunch``.
 
     Every reference is copied into the result, so the runtime that finalizes it
     needs no store. All dangling references are raised together as
     :class:`UnresolvedProfileReferences`; a store that cannot be read raises
     :class:`LaunchStoreError`; an unknown profile id raises ``ProfileNotFound``.
     """
-    if isinstance(source, UUID):
-        profile = _load_stored_profile(source, stores)
-        inline = False
-    else:
-        profile = source
-        inline = True
-    if llm_profile_ref is not None and not isinstance(profile, OpenHandsAgentProfile):
-        raise AgentLaunchError(
-            "agent_launch_additions.llm_profile_ref applies only to an "
-            "OpenHands Agent Profile"
-        )
-
+    profile = (
+        _load_stored_profile(source, stores) if isinstance(source, UUID) else source
+    )
     mcp_config, _, dangling_mcp = _compute_mcp_filter(
         dict(stores.mcp_config), profile.mcp_server_refs
     )
@@ -114,7 +100,7 @@ def resolve(
             raise AgentLaunchError(str(exc)) from exc
     else:
         settings = _resolve_openhands(
-            profile, stores, mcp_config, catalog, dangling_mcp, llm_profile_ref
+            profile, stores, mcp_config, catalog, dangling_mcp
         )
     if not isinstance(settings, OpenHandsAgentSettings | ACPAgentSettings):
         raise AgentLaunchError(f"Unsupported agent kind {settings.agent_kind!r}")
@@ -124,8 +110,6 @@ def resolve(
             agent_profile_id=profile.id,
             revision=profile.revision,
             secret_refs=profile.secret_refs,
-            inline=inline,
-            llm_profile_ref=llm_profile_ref,
         ),
     )
 
@@ -136,16 +120,14 @@ def _resolve_openhands(
     mcp_config: dict[str, MCPServer],
     catalog: list[Skill],
     dangling_mcp: list[str],
-    llm_profile_ref: str | None,
 ) -> OpenHandsAgentSettings | ACPAgentSettings:
-    llm_ref = llm_profile_ref or profile.llm_profile_ref
-    llm = _load_llm(stores, llm_ref)
+    llm = _load_llm(stores, profile.llm_profile_ref)
     meta_profile, meta_llms, dangling_meta, dangling_meta_llms = _load_meta_profile(
         profile, stores
     )
     if llm is None or dangling_mcp or dangling_meta or dangling_meta_llms:
         raise UnresolvedProfileReferences(
-            llm_profile_ref=llm_ref if llm is None else None,
+            llm_profile_ref=profile.llm_profile_ref if llm is None else None,
             mcp_server_refs=dangling_mcp,
             meta_profile_ref=dangling_meta,
             meta_profile_llm_refs=dangling_meta_llms,

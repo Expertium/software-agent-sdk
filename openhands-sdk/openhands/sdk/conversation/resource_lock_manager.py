@@ -10,9 +10,12 @@ for fairness (no starvation).
 
 from __future__ import annotations
 
+import math
 import threading
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Final
 
 from openhands.sdk.conversation.fifo_lock import FIFOLock
@@ -26,6 +29,39 @@ DEFAULT_TIMEOUTS: Final[dict[str, float]] = {
     "tool": 60.0,
 }
 _DEFAULT_TIMEOUT: Final[float] = 30.0
+
+_ACTION_TIMEOUT_DEADLINE: ContextVar[float | None] = ContextVar(
+    "openhands_action_timeout_deadline", default=None
+)
+
+
+@contextmanager
+def action_timeout(timeout: float | None) -> Generator[None]:
+    if timeout is None:
+        yield
+        return
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("action timeout must be finite and positive")
+
+    deadline = time.monotonic() + timeout
+    previous_deadline = _ACTION_TIMEOUT_DEADLINE.get()
+    if previous_deadline is not None:
+        deadline = min(deadline, previous_deadline)
+    token = _ACTION_TIMEOUT_DEADLINE.set(deadline)
+    try:
+        yield
+    finally:
+        _ACTION_TIMEOUT_DEADLINE.reset(token)
+
+
+def get_action_timeout(default: float | None = None) -> float | None:
+    deadline = _ACTION_TIMEOUT_DEADLINE.get()
+    if deadline is None:
+        return default
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Tool action exceeded its bounded timeout")
+    return remaining if default is None else min(remaining, default)
 
 
 class ResourceLockTimeout(TimeoutError):
@@ -82,11 +118,14 @@ class ResourceLockManager:
         return self._timeouts.get(prefix, _DEFAULT_TIMEOUT)
 
     @contextmanager
-    def lock(self, *resource_keys: str) -> Generator[None]:
+    def lock(
+        self, *resource_keys: str, timeout: float | None = None
+    ) -> Generator[None]:
         """Acquire locks for all *resource_keys* in sorted order.
 
         Sorted acquisition prevents deadlocks when two threads need
-        overlapping sets of resources.
+        overlapping sets of resources. An optional timeout can shorten, but
+        never extend, each resource's configured lock timeout.
 
         Raises:
             ResourceLockTimeout: If a lock cannot be acquired within
@@ -94,10 +133,20 @@ class ResourceLockManager:
         """
         sorted_keys = sorted(set(resource_keys))
         acquired: list[str] = []
+        deadline = _ACTION_TIMEOUT_DEADLINE.get()
+        if timeout is not None:
+            local_deadline = time.monotonic() + timeout
+            deadline = (
+                local_deadline if deadline is None else min(deadline, local_deadline)
+            )
         try:
             for key in sorted_keys:
-                timeout = self._get_timeout(key)
-                if not self._get_lock(key).acquire(timeout=timeout):
+                key_timeout = self._get_timeout(key)
+                if deadline is not None:
+                    key_timeout = min(
+                        key_timeout, max(0.0, deadline - time.monotonic())
+                    )
+                if not self._get_lock(key).acquire(timeout=key_timeout):
                     # _get_lock() already incremented the refcount for this
                     # key. Since acquisition failed, this key won't be added
                     # to acquired[] and the finally block won't clean it up
@@ -108,7 +157,7 @@ class ResourceLockManager:
                             del self._locks[key]
                             del self._refcounts[key]
                     raise ResourceLockTimeout(
-                        f"Could not acquire lock for '{key}' within {timeout}s"
+                        f"Could not acquire lock for '{key}' within {key_timeout:g}s"
                     )
                 acquired.append(key)
             yield

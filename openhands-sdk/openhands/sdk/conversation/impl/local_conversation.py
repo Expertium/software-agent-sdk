@@ -2279,13 +2279,11 @@ class LocalConversation(BaseConversation):
                         iteration += 1
 
                         # astep releases the state lock for the LLM call, so a
-                        # message can land mid-step with status still RUNNING and
-                        # go unrecorded; without this rescan the loop would break
-                        # (or hang behind a stale pending confirmation) with it
-                        # unread (agent-canvas#1900). Mirrors the ACP branch's
-                        # rescan below. step_finished is captured before this
-                        # rescan can flip status back to RUNNING, so the budget
-                        # carve-out below still sees the step's real outcome.
+                        # message can land mid-step. Capture it before the next
+                        # step, and reject stale pending actions before they can
+                        # be treated as an implicit confirmation. Capture the
+                        # step outcome before rescheduling so the budget check
+                        # below still sees the original result.
                         step_finished = (
                             self._state.execution_status
                             == ConversationExecutionStatus.FINISHED
@@ -2297,8 +2295,10 @@ class LocalConversation(BaseConversation):
                         new_message_arrived = (
                             self._state.last_user_message_id != last_user_message_id
                         )
-                        if new_message_arrived and (
-                            step_finished or step_awaiting_confirmation
+                        if new_message_arrived and self._state.execution_status not in (
+                            ConversationExecutionStatus.PAUSED,
+                            ConversationExecutionStatus.STUCK,
+                            ConversationExecutionStatus.ERROR,
                         ):
                             if step_awaiting_confirmation:
                                 # Reject up front, regardless of whether we

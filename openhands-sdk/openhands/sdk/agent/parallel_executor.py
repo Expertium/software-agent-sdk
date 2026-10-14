@@ -25,7 +25,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from openhands.sdk.conversation.cancellation import CancellationToken
-from openhands.sdk.conversation.resource_lock_manager import ResourceLockManager
+from openhands.sdk.conversation.resource_lock_manager import (
+    ResourceLockManager,
+    action_timeout,
+)
 from openhands.sdk.event.error_classification import (
     AGENT_OUTCOME,
     ErrorClassification,
@@ -238,9 +241,12 @@ class ParallelToolExecutor:
         try:
             return await fut
         except asyncio.CancelledError:
-            # The asyncio task was cancelled (interrupt), but the
-            # thread-pool worker is still running.  Signal the tool
-            # to abort its in-flight work so the thread exits quickly.
+            # Explicit conversation interrupts cancel the run-level token before
+            # cancelling this task; propagate those so arun() can pause normally.
+            if cancel_token is not None and cancel_token.is_cancelled:
+                raise
+
+            # A tool task cancelled independently should not cancel the whole run.
             if tool is not None and tool.executor is not None:
                 try:
                     tool.executor.interrupt()
@@ -250,7 +256,7 @@ class ParallelToolExecutor:
                         action.tool_name,
                         exc_info=True,
                     )
-            raise
+            return self._cancelled_error(action, span_owner)
 
     @staticmethod
     def _cancelled_error(
@@ -305,10 +311,12 @@ class ParallelToolExecutor:
 
             resources = self._extract_declared_resources(action, tool)
             lock_keys = self._resolve_lock_keys(resources, tool)
-            if not lock_keys:
-                return tool_runner(action)
-            with self._lock_manager.lock(*lock_keys):
-                return tool_runner(action)
+            lock_timeout = resources.timeout if resources is not None else None
+            with action_timeout(lock_timeout):
+                if not lock_keys:
+                    return tool_runner(action)
+                with self._lock_manager.lock(*lock_keys, timeout=lock_timeout):
+                    return tool_runner(action)
 
         except ValueError as e:
             logger.info(f"Tool error in '{action.tool_name}': {e}")

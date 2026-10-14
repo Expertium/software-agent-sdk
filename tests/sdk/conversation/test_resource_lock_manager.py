@@ -1,13 +1,22 @@
 """Tests for ResourceLockManager."""
 
 import threading
+import time
 
 import pytest
 
 from openhands.sdk.conversation.resource_lock_manager import (
     ResourceLockManager,
     ResourceLockTimeout,
+    action_timeout,
 )
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("-inf"), float("nan")])
+def test_action_timeout_rejects_nonfinite_or_nonpositive_values(timeout):
+    with pytest.raises(ValueError, match="finite and positive"):
+        with action_timeout(timeout):
+            pass
 
 
 def test_basic_lock_and_release():
@@ -98,6 +107,58 @@ def test_sorted_order_prevents_deadlock():
     t2.join(timeout=5)
 
     assert set(results) == {"A", "B"}
+
+
+def test_action_timeout_caps_resource_lock_wait():
+    mgr = ResourceLockManager()
+    held = threading.Event()
+    release = threading.Event()
+
+    def holder() -> None:
+        with mgr.lock("terminal:session"):
+            held.set()
+            release.wait(timeout=5)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    held.wait(timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(ResourceLockTimeout, match="Could not acquire lock"):
+        with mgr.lock("terminal:session", timeout=0.05):
+            pass
+    assert time.monotonic() - started < 0.5
+
+    release.set()
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+
+
+def test_action_deadline_caps_default_resource_lock_timeout():
+    mgr = ResourceLockManager()
+    held = threading.Event()
+    release = threading.Event()
+
+    def holder() -> None:
+        with mgr.lock("terminal:session"):
+            held.set()
+            release.wait(timeout=5)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    assert held.wait(timeout=1)
+
+    started = time.monotonic()
+    try:
+        with action_timeout(0.05):
+            with pytest.raises(ResourceLockTimeout):
+                with mgr.lock("terminal:session"):
+                    pass
+        assert time.monotonic() - started < 0.5
+    finally:
+        release.set()
+        thread.join(timeout=1)
+    assert not thread.is_alive()
 
 
 def test_timeout_raises_custom_exception():

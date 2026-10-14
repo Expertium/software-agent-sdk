@@ -11,6 +11,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Mapping
+from contextlib import suppress
 
 from openhands.sdk.logger import get_logger
 from openhands.tools.terminal.constants import (
@@ -180,33 +181,39 @@ class WindowsTerminal(TerminalInterface):
 
         self._stop_reader.set()
         self._terminate_child_processes()
+        process = self.process
+        if process is not None:
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                    process.wait(timeout=5.0)
+                except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+                    logger.debug("Error terminating PowerShell process: %s", exc)
+                    with suppress(OSError):
+                        process.kill()
+                    with suppress(subprocess.TimeoutExpired, OSError):
+                        process.wait(timeout=5.0)
 
-        if self.process is not None:
-            try:
-                if self.process.stdin is not None:
+            if self.reader_thread and self.reader_thread.is_alive():
+                self.reader_thread.join(timeout=_READER_THREAD_TIMEOUT_SECONDS)
+
+            if self.process is not None and self.process.stdin is not None:
+                try:
                     self.process.stdin.close()
-            except (OSError, ValueError) as exc:
-                logger.debug("Error closing PowerShell stdin: %s", exc)
+                except (OSError, ValueError) as exc:
+                    logger.debug("Error closing PowerShell stdin: %s", exc)
 
-        if self.reader_thread and self.reader_thread.is_alive():
-            self.reader_thread.join(timeout=_READER_THREAD_TIMEOUT_SECONDS)
-
-        if self.process is not None:
-            try:
-                if self.process.stdout is not None:
-                    self.process.stdout.close()
-            except (OSError, ValueError) as exc:
-                logger.debug("Error closing PowerShell stdout: %s", exc)
-            try:
-                self.process.terminate()
-                self.process.wait(timeout=5.0)
-            except subprocess.TimeoutExpired:
-                logger.warning("PowerShell process did not terminate, forcing kill")
-                self.process.kill()
-            except Exception as exc:
-                logger.debug("Error terminating PowerShell process: %s", exc)
-            finally:
-                self.process = None
+            if process.stdout is not None:
+                if self.reader_thread and self.reader_thread.is_alive():
+                    logger.warning(
+                        "PowerShell output reader did not stop after process exit"
+                    )
+                else:
+                    try:
+                        process.stdout.close()
+                    except (OSError, ValueError) as exc:
+                        logger.debug("Error closing PowerShell stdout: %s", exc)
+            self.process = None
 
         self._closed = True
 

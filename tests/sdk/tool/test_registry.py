@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from typing import Any
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 
@@ -30,6 +31,33 @@ def _create_mock_conv_state() -> ConversationState:
     mock_conv_state.workspace = "workspace/project"
     mock_conv_state.persistence_dir = None
     return mock_conv_state
+
+
+def test_resolve_terminal_injects_hidden_recovery_tool(tmp_path):
+    from openhands.sdk.agent import Agent
+    from openhands.sdk.conversation.state import ConversationState
+    from openhands.sdk.llm import LLM
+    from openhands.sdk.workspace import LocalWorkspace
+    from openhands.tools.terminal import TerminalTool
+
+    agent = Agent(llm=LLM(model="test-model"), tools=[])
+    state = ConversationState.create(
+        id=uuid4(),
+        agent=agent,
+        workspace=LocalWorkspace(working_dir=str(tmp_path)),
+    )
+    terminal_tool = TerminalTool.create(state, terminal_type="powershell")[0]
+    executor = terminal_tool.as_executable().executor
+    register_tool("terminal", terminal_tool)
+    try:
+        resolved = resolve_tool(Tool(name="terminal"), state)
+
+        assert [tool.name for tool in resolved] == ["terminal", "terminal_recover"]
+        assert resolved[1].prompt_guidance is not None
+        assert resolved[1].declared_resources(resolved[1].action_type()).keys == ()
+    finally:
+        if executor is not None:
+            executor.close()
 
 
 class _HelloAction(Action):

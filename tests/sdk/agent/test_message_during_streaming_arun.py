@@ -160,6 +160,34 @@ async def test_message_during_streaming_is_acted_upon(tmp_path):
     assert convo.state.execution_status == ConversationExecutionStatus.FINISHED
 
 
+@pytest.mark.asyncio
+async def test_message_during_running_tool_step_is_preserved_at_iteration_limit(
+    tmp_path,
+):
+    """A message during a tool step is deferred rather than treated as an error."""
+    llm = _InjectingAsyncConfirmLLM()
+    convo = LocalConversation(
+        agent=Agent(llm=llm, tools=[Tool(name="async_confirm_tool")]),
+        workspace=str(tmp_path),
+        visualizer=None,
+        max_iteration_per_run=1,
+    )
+    llm._convo_box.append(convo)
+    convo.send_message("first message")
+
+    await convo.arun()
+
+    assert len(llm._calls) == 1
+    assert convo.state.execution_status == ConversationExecutionStatus.IDLE
+
+    await convo.arun()
+
+    assert len(llm._calls) == 2
+    assert _saw(llm._calls, "second message") == [1]
+    assert convo.state.execution_status == ConversationExecutionStatus.FINISHED
+    assert not any(isinstance(e, UserRejectObservation) for e in convo.state.events)
+
+
 def test_sync_run_absorbs_message_sent_during_step(tmp_path):
     """CONTROL: the sync run() path does NOT drop the message."""
     llm = _InjectingSyncLLM()
