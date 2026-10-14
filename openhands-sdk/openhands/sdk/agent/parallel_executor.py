@@ -241,9 +241,12 @@ class ParallelToolExecutor:
         try:
             return await fut
         except asyncio.CancelledError:
-            # The asyncio task was cancelled (interrupt), but the
-            # thread-pool worker is still running.  Signal the tool
-            # to abort its in-flight work so the thread exits quickly.
+            # Explicit conversation interrupts cancel the run-level token before
+            # cancelling this task; propagate those so arun() can pause normally.
+            if cancel_token is not None and cancel_token.is_cancelled:
+                raise
+
+            # A tool task cancelled independently should not cancel the whole run.
             if tool is not None and tool.executor is not None:
                 try:
                     tool.executor.interrupt()
@@ -253,7 +256,7 @@ class ParallelToolExecutor:
                         action.tool_name,
                         exc_info=True,
                     )
-            raise
+            return self._cancelled_error(action, span_owner)
 
     @staticmethod
     def _cancelled_error(
