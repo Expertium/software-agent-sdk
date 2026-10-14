@@ -172,6 +172,62 @@ def test_conversation_state_persistence_save_load():
         assert len(loaded_state.events) == len(state.events)
 
 
+def test_conversation_resume_normalizes_legacy_terminal_timeout():
+    from openhands.sdk.event.llm_convertible import ActionEvent
+    from openhands.sdk.llm import MessageToolCall
+    from openhands.tools.terminal import TerminalAction
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        llm = LLM(
+            model="gpt-4o-mini", api_key=SecretStr("test-key"), usage_id="test-llm"
+        )
+        agent = Agent(llm=llm, tools=[])
+        conv_id = uuid.uuid4()
+        persist_path = LocalConversation.get_persistence_dir(temp_dir, conv_id)
+        state = ConversationState.create(
+            agent=agent,
+            id=conv_id,
+            workspace=LocalWorkspace(working_dir=temp_dir),
+            persistence_dir=persist_path,
+        )
+        event = ActionEvent(
+            thought=[TextContent(text="Run a command")],
+            action=TerminalAction(command="echo ready"),
+            tool_name="terminal",
+            tool_call_id="call-1",
+            tool_call=MessageToolCall(
+                id="call-1",
+                name="terminal",
+                arguments='{"command":"echo ready"}',
+                origin="completion",
+            ),
+            llm_response_id="response-1",
+        )
+        payload = json.loads(event.model_dump_json(exclude_none=True))
+        payload["action"]["timeout"] = 420
+        event_path = Path(persist_path, "events", f"event-00000-{event.id}.json")
+        event_path.parent.mkdir(parents=True, exist_ok=True)
+        event_path.write_text(json.dumps(payload), encoding="utf-8")
+        state._events._event_cache.clear()
+
+        resumed = Conversation(
+            agent=agent,
+            persistence_dir=temp_dir,
+            workspace=LocalWorkspace(working_dir=temp_dir),
+            conversation_id=conv_id,
+        )
+
+        assert isinstance(resumed, LocalConversation)
+        restored = resumed._state.events[0]
+        assert isinstance(restored, ActionEvent)
+        assert isinstance(restored.action, TerminalAction)
+        assert restored.action.timeout == 300
+        assert (
+            json.loads(event_path.read_text(encoding="utf-8"))["action"]["timeout"]
+            == 420
+        )
+
+
 def test_conversation_state_incremental_save():
     """Test that ConversationState saves events incrementally."""
     with tempfile.TemporaryDirectory() as temp_dir:

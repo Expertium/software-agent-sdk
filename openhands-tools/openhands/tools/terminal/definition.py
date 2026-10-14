@@ -1,11 +1,12 @@
 """Execute shell commands in a persistent terminal session."""
 
+import math
 import os
 import platform
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationInfo, model_validator
 
 
 if TYPE_CHECKING:
@@ -118,6 +119,32 @@ class TerminalAction(Action):
             f"{DEFAULT_COMMAND_TIMEOUT_SECONDS:g} seconds."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_persisted_timeout(
+        cls, value: Any, info: ValidationInfo
+    ) -> Any:
+        if not (
+            isinstance(value, dict)
+            and info.context
+            and info.context.get("persisted_event")
+        ):
+            return value
+        timeout = value.get("timeout")
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+        ):
+            timeout = DEFAULT_COMMAND_TIMEOUT_SECONDS
+        value = value.copy()
+        value["timeout"] = min(
+            MAX_COMMAND_TIMEOUT_SECONDS,
+            max(MIN_COMMAND_TIMEOUT_SECONDS, timeout),
+        )
+        return value
+
     reset: bool = Field(
         default=False,
         description="If True, reset the terminal by creating a new session. Use this only when the terminal becomes unresponsive. Note that all previously set environment variables and session state will be lost after reset. Cannot be used with is_input=True.",  # noqa
