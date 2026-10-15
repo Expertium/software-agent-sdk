@@ -366,7 +366,10 @@ async def session_socket(
     # anything appended before subscribe is on disk before the mark is read,
     # and anything after lands in the buffer and is deduped by seq.
     try:
-        subscriber_id = await event_service.subscribe_to_events(subscriber)
+        subscriber_id = await event_service.subscribe_to_events(
+            subscriber,
+            initial_state_update=event_service.create_execution_status_update,
+        )
     except MaxSubscribersError:
         logger.warning("session_socket_subscriber_limit: %s", conversation_id)
         await writer.aclose()

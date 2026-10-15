@@ -298,7 +298,8 @@ async def events_socket(
 
     try:
         subscriber_id = await event_service.subscribe_to_events(
-            _WebSocketSubscriber(websocket)
+            _WebSocketSubscriber(websocket),
+            initial_state_update=event_service.create_execution_status_update,
         )
     except MaxSubscribersError:
         logger.warning(f"Subscriber limit reached for conversation {conversation_id}")
