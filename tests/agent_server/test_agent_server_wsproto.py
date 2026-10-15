@@ -23,7 +23,7 @@ def find_free_port():
 
 
 def _drop_site_packages_subdir_paths():
-    """Remove sys.path entries that point *inside* a site-packages directory.
+    """Remove leaked ``browser_use`` paths without hiding native extensions.
 
     This test spawns the server with the ``spawn`` start method from within a
     pytest-xdist worker, so the child inherits the worker's ``sys.path``. Under
@@ -31,15 +31,19 @@ def _drop_site_packages_subdir_paths():
     (``.../site-packages/browser_use``) at ``sys.path[0]``, which makes its
     sub-packages importable as top-level modules — ``browser_use/mcp`` then
     shadows the real ``mcp`` and fastmcp's eager ``import mcp`` crashes startup
-    with a ``mcp`` <-> ``browser_use.mcp`` circular import. Dropping such
-    entries restores normal top-level resolution.
+    with a ``mcp`` <-> ``browser_use.mcp`` circular import. Keep other
+    site-packages subdirectories, such as pywin32's native ``win32`` modules.
     """
-    cleaned = [
-        entry
-        for entry in sys.path
-        if os.path.basename(os.path.dirname(entry.rstrip(os.sep))) != "site-packages"
-    ]
-    sys.path[:] = cleaned
+
+    def is_browser_use_path(entry: str) -> bool:
+        parts = os.path.normcase(os.path.normpath(entry)).split(os.sep)
+        return any(
+            parts[index : index + 2]
+            == [os.path.normcase("site-packages"), os.path.normcase("browser_use")]
+            for index in range(len(parts) - 1)
+        )
+
+    sys.path[:] = [entry for entry in sys.path if not is_browser_use_path(entry)]
 
 
 def run_agent_server(port, api_key):
@@ -366,6 +370,54 @@ async def test_session_socket_opens_with_a_sync_frame(agent_server):
     assert first["type"] == "sync"
     # Nothing was requested, so the range is open at the bottom.
     assert first.get("from_seq") is None
+
+
+@pytest.mark.asyncio
+async def test_session_socket_initial_snapshot_omits_agent_context(agent_server):
+    port, api_key = agent_server["port"], agent_server["api_key"]
+    large_agent = {
+        "kind": "Agent",
+        "llm": {
+            "usage_id": "test-llm",
+            "model": "test-provider/test-model",
+            "api_key": "test-key",
+        },
+        "agent_context": {
+            "skills": [
+                {
+                    "name": "large-context",
+                    "type": "repo",
+                    "content": "x" * (5 * 1024 * 1024),
+                }
+            ]
+        },
+        "tools": [],
+    }
+    create_response = requests.post(
+        f"http://127.0.0.1:{port}/api/conversations",
+        headers={"X-Session-API-Key": api_key},
+        json={
+            "agent": large_agent,
+            "workspace": {"working_dir": "/tmp/test-workspace"},
+        },
+    )
+    assert create_response.status_code in [200, 201], create_response.text
+    conversation_id = create_response.json()["id"]
+
+    ws_url = (
+        f"ws://127.0.0.1:{port}/sockets/session/{conversation_id}"
+        f"?session_api_key={api_key}"
+    )
+    async with websockets.connect(ws_url, open_timeout=5) as ws:
+        sync = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+        snapshot = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+
+    assert sync["type"] == "sync"
+    assert snapshot["type"] == "transient"
+    assert snapshot["event"]["kind"] == "ConversationStateUpdateEvent"
+    assert snapshot["event"]["key"] == "execution_status"
+    assert snapshot["event"]["value"] == "idle"
+    assert len(json.dumps(snapshot)) < 1024
 
 
 @pytest.mark.asyncio

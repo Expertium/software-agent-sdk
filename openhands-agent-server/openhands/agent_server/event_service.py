@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
@@ -806,6 +806,24 @@ class EventService:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._create_state_update_event_sync)
 
+    def _create_execution_status_update_sync(self) -> ConversationStateUpdateEvent:
+        if not self._conversation:
+            status = ConversationExecutionStatus.IDLE
+        else:
+            state = self._conversation._state
+            with state:
+                status = state.execution_status
+        return ConversationStateUpdateEvent(
+            key="execution_status",
+            value=status,
+        )
+
+    async def create_execution_status_update(self) -> ConversationStateUpdateEvent:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self._create_execution_status_update_sync
+        )
+
     def _event_matches_body(self, event: Event, body: str) -> bool:
         """Check if event's message content matches body filter (case-insensitive)."""
         # Import here to avoid circular imports
@@ -957,13 +975,22 @@ class EventService:
             None, self._mark_running_acp_prompt_superseded_sync
         )
 
-    async def subscribe_to_events(self, subscriber: Subscriber[Event]) -> UUID:
+    async def subscribe_to_events(
+        self,
+        subscriber: Subscriber[Event],
+        *,
+        initial_state_update: (
+            Callable[[], Awaitable[ConversationStateUpdateEvent]] | None
+        ) = None,
+    ) -> UUID:
         subscriber_id = self._pub_sub.subscribe(subscriber)
 
         # Send current state to the new subscriber immediately.
         # The snapshot is created in a worker thread so waiting on the
         # conversation's synchronous FIFOLock cannot block the server event loop.
-        if self._conversation:
+        if initial_state_update is not None:
+            state_update_event = await initial_state_update()
+        elif self._conversation:
             state_update_event = await self._create_state_update_event()
         else:
             state_update_event = ConversationStateUpdateEvent(
