@@ -807,12 +807,11 @@ class EventService:
         return await loop.run_in_executor(None, self._create_state_update_event_sync)
 
     def _create_execution_status_update_sync(self) -> ConversationStateUpdateEvent:
-        if not self._conversation:
-            status = ConversationExecutionStatus.IDLE
-        else:
-            state = self._conversation._state
-            with state:
-                status = state.execution_status
+        status = (
+            self._conversation._state.execution_status
+            if self._conversation
+            else ConversationExecutionStatus.IDLE
+        )
         return ConversationStateUpdateEvent(
             key="execution_status",
             value=status,

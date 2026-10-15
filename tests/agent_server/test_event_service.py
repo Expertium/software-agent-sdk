@@ -2614,6 +2614,36 @@ class TestEventServiceConcurrentSubscriptions:
         return conversation
 
     @pytest.mark.asyncio
+    async def test_execution_status_snapshot_does_not_wait_for_state_lock(
+        self, event_service, mock_conversation_with_real_lock
+    ):
+        event_service._conversation = mock_conversation_with_real_lock
+        state = mock_conversation_with_real_lock._state
+        ready = threading.Event()
+        release = threading.Event()
+
+        def hold_state_lock():
+            with state:
+                ready.set()
+                release.wait(timeout=2)
+
+        holder = threading.Thread(target=hold_state_lock)
+        holder.start()
+        assert await asyncio.to_thread(ready.wait, 1)
+
+        try:
+            event = await asyncio.wait_for(
+                event_service.create_execution_status_update(), timeout=0.2
+            )
+        finally:
+            release.set()
+            await asyncio.to_thread(holder.join, 1)
+
+        assert isinstance(event, ConversationStateUpdateEvent)
+        assert event.key == "execution_status"
+        assert event.value == ConversationExecutionStatus.IDLE
+
+    @pytest.mark.asyncio
     async def test_concurrent_subscriptions_no_deadlock(
         self, event_service, mock_conversation_with_real_lock
     ):

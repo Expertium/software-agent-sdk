@@ -305,20 +305,33 @@ async def test_agent_server_websocket_first_message_auth_malformed(agent_server)
 # auth, lookup, sync frame, replay from disk, resume by cursor, close codes.
 
 
-def _create_conversation(port: int, api_key: str) -> str:
+def _create_conversation(
+    port: int, api_key: str, *, large_agent_context: bool = False
+) -> str:
+    agent = {
+        "kind": "Agent",
+        "llm": {
+            "usage_id": "test-llm",
+            "model": "test-provider/test-model",
+            "api_key": "test-key",
+        },
+        "tools": [],
+    }
+    if large_agent_context:
+        agent["agent_context"] = {
+            "skills": [
+                {
+                    "name": "large-context",
+                    "type": "repo",
+                    "content": "x" * (5 * 1024 * 1024),
+                }
+            ]
+        }
     response = requests.post(
         f"http://127.0.0.1:{port}/api/conversations",
         headers={"X-Session-API-Key": api_key},
         json={
-            "agent": {
-                "kind": "Agent",
-                "llm": {
-                    "usage_id": "test-llm",
-                    "model": "test-provider/test-model",
-                    "api_key": "test-key",
-                },
-                "tools": [],
-            },
+            "agent": agent,
             "workspace": {"working_dir": "/tmp/test-workspace"},
         },
     )
@@ -373,36 +386,27 @@ async def test_session_socket_opens_with_a_sync_frame(agent_server):
 
 
 @pytest.mark.asyncio
+async def test_legacy_events_socket_initial_snapshot_omits_agent_context(agent_server):
+    port, api_key = agent_server["port"], agent_server["api_key"]
+    conversation_id = _create_conversation(port, api_key, large_agent_context=True)
+    ws_url = (
+        f"ws://127.0.0.1:{port}/sockets/events/{conversation_id}"
+        f"?session_api_key={api_key}"
+    )
+
+    async with websockets.connect(ws_url, open_timeout=5) as ws:
+        snapshot = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+
+    assert snapshot["kind"] == "ConversationStateUpdateEvent"
+    assert snapshot["key"] == "execution_status"
+    assert snapshot["value"] == "idle"
+    assert len(json.dumps(snapshot)) < 1024
+
+
+@pytest.mark.asyncio
 async def test_session_socket_initial_snapshot_omits_agent_context(agent_server):
     port, api_key = agent_server["port"], agent_server["api_key"]
-    large_agent = {
-        "kind": "Agent",
-        "llm": {
-            "usage_id": "test-llm",
-            "model": "test-provider/test-model",
-            "api_key": "test-key",
-        },
-        "agent_context": {
-            "skills": [
-                {
-                    "name": "large-context",
-                    "type": "repo",
-                    "content": "x" * (5 * 1024 * 1024),
-                }
-            ]
-        },
-        "tools": [],
-    }
-    create_response = requests.post(
-        f"http://127.0.0.1:{port}/api/conversations",
-        headers={"X-Session-API-Key": api_key},
-        json={
-            "agent": large_agent,
-            "workspace": {"working_dir": "/tmp/test-workspace"},
-        },
-    )
-    assert create_response.status_code in [200, 201], create_response.text
-    conversation_id = create_response.json()["id"]
+    conversation_id = _create_conversation(port, api_key, large_agent_context=True)
 
     ws_url = (
         f"ws://127.0.0.1:{port}/sockets/session/{conversation_id}"
