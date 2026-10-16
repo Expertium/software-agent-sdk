@@ -210,6 +210,22 @@ class TestEventServiceSearchEvents:
     """Test cases for EventService.search_events method."""
 
     @pytest.mark.asyncio
+    async def test_get_event_returns_persisted_event(self, event_service):
+        fs = InMemoryFileStore()
+        event_log = EventLog(fs)
+        event = _message_event(str(uuid4()), "hello", "2026-01-01T00:00:00.000000")
+        event_log.append(event)
+        _attach_event_log(event_service, event_log)
+
+        assert await event_service.get_event(event.id) == event
+
+    @pytest.mark.asyncio
+    async def test_get_event_returns_none_for_unknown_event(self, event_service):
+        _attach_event_log(event_service, EventLog(InMemoryFileStore()))
+
+        assert await event_service.get_event("missing-event") is None
+
+    @pytest.mark.asyncio
     async def test_search_events_inactive_service(self, event_service):
         """Test that search_events raises ValueError when conversation is not active."""
         event_service._conversation = None
@@ -832,6 +848,7 @@ class TestEventServiceSendMessage:
     @pytest.mark.asyncio
     async def test_send_message_with_run_false_default(self, event_service):
         """Test send_message with default run=True."""
+
         # Mock conversation and its methods
         conversation = MagicMock()
         state = MagicMock()

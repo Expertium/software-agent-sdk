@@ -260,9 +260,69 @@ async def test_wedged_connection_drops_instead_of_blocking_the_publisher():
 
 
 @pytest.mark.asyncio
-async def test_oversized_frame_drops_the_connection_not_the_event():
-    """Durable must survive a reconnect, so an unsendable frame kills the
-    connection and the client resumes from its cursor."""
+async def test_oversized_durable_event_is_sent_as_a_reference():
+    """A resumable reference lets clients fetch large payloads without a loop."""
+    ws, log = _FakeWebSocket(), _FakeEventLog()
+    writer = _ConnectionWriter(ws, supports_durable_references=True)  # type: ignore[arg-type]
+    writer.start()
+    sub = _SessionSubscriber(writer=writer, events=log)  # type: ignore[arg-type]
+    sub.go_live(None)
+
+    huge = _msg("x" * (MAX_FRAME_BYTES + 1))
+    seq = log.add(huge)
+    await sub(huge)
+    await _drain(writer)
+
+    assert not writer.closed
+    assert writer.drop_reason is None
+    assert ws.frames() == [
+        {
+            "type": "durable_reference",
+            "seq": seq,
+            "event_id": huge.id,
+        }
+    ]
+    assert len(ws.sent[0].encode("utf-8")) < 1024
+
+
+@pytest.mark.asyncio
+async def test_durable_reference_retires_matching_started_item():
+    ws, log = _FakeWebSocket(), _FakeEventLog()
+    writer = _ConnectionWriter(ws, supports_durable_references=True)  # type: ignore[arg-type]
+    writer.start()
+    progress = _ProgressSubscriber(writer)
+    sub = _SessionSubscriber(writer=writer, events=log)  # type: ignore[arg-type]
+    sub.go_live(None)
+
+    huge = MessageEvent(
+        source="agent",
+        llm_message=Message(
+            role="assistant",
+            content=[TextContent(text="x" * (MAX_FRAME_BYTES + 1))],
+        ),
+    )
+    seq = log.add(huge)
+
+    await progress(StreamStarted(item_id=huge.id, attempt=1, anchor_seq=None))
+    await sub(huge)
+    await _drain(writer)
+    await writer.aclose()
+
+    started, reference = ws.frames()
+    assert started["type"] == "item_started"
+    assert started["item_id"] == huge.id
+    assert reference == {
+        "type": "durable_reference",
+        "seq": seq,
+        "event_id": huge.id,
+    }
+    assert reference["event_id"] == started["item_id"]
+
+    await writer.aclose()
+
+
+@pytest.mark.asyncio
+async def test_oversized_durable_event_keeps_legacy_close_without_capability():
     ws, log = _FakeWebSocket(), _FakeEventLog()
     writer = _ConnectionWriter(ws)  # type: ignore[arg-type]
     writer.start()

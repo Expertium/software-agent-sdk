@@ -534,7 +534,10 @@ class EventService:
         append-only and immutable once written.
         """
         events = self._events_for_read()
-        index = events.get_index(event_id)
+        try:
+            index = events.get_index(event_id)
+        except KeyError:
+            return None
         return events[index]
 
     async def get_event(self, event_id: str) -> Event | None:

@@ -14,11 +14,15 @@ Delivery rules:
    of blocking the publisher.
 2. ``Delta`` may be dropped freely; a gap marks the slot lossy and the real
    text arrives with the durable message.
-3. Every ``ItemStarted`` is retired by exactly one ``Durable`` or
-   ``ItemAborted``. ``item_id`` *is* the finished message's ``Event.id``, so a
-   client closes a slot on ``frame.event.id == slot.item_id``.
-4. Progress frames are never replayed.
-5. No ordering is promised between two open items.
+3. Every ``ItemStarted`` is retired by exactly one ``Durable``,
+   ``DurableReference``, or ``ItemAborted``. ``item_id`` *is* the finished
+   message's ``Event.id``; clients close a slot when either
+   ``frame.event.id`` or ``frame.event_id`` equals ``slot.item_id``.
+4. ``DurableReference`` is sent only when the client opts in and a persisted
+   event exceeds the frame limit. It carries the event's ``seq`` and ``event_id``;
+   the client fetches its full payload from ``GET /events/{event_id}``.
+5. Progress frames are never replayed.
+6. No ordering is promised between two open items.
 """
 
 from typing import Annotated, Final, Literal
@@ -32,7 +36,7 @@ from openhands.sdk import Event
 # distribution, which has not been done yet. Do not treat these as tuned.
 
 MAX_FRAME_BYTES: Final[int] = 4 * 1024 * 1024
-"""Largest frame the server will emit; a bigger one drops the connection."""
+"""Largest frame the server will emit."""
 
 MAX_PENDING_BYTES: Final[int] = 4 * MAX_FRAME_BYTES
 """Per-connection write budget. Over it, the connection is dropped."""
@@ -66,6 +70,7 @@ class SyncFrame(SessionFrameBase):
             "established; everything above it arrives live. None if empty."
         ),
     )
+    durable_references: bool = False
 
 
 class DurableFrame(SessionFrameBase):
@@ -78,6 +83,14 @@ class DurableFrame(SessionFrameBase):
     type: Literal["durable"] = "durable"
     seq: int
     event: Event
+
+
+class DurableReferenceFrame(SessionFrameBase):
+    """A persisted event whose complete payload must be fetched over REST."""
+
+    type: Literal["durable_reference"] = "durable_reference"
+    seq: int
+    event_id: str
 
 
 class TransientFrame(SessionFrameBase):
@@ -157,6 +170,7 @@ class ErrorFrame(SessionFrameBase):
 SessionFrame = Annotated[
     SyncFrame
     | DurableFrame
+    | DurableReferenceFrame
     | TransientFrame
     | ItemStartedFrame
     | DeltaFrame
