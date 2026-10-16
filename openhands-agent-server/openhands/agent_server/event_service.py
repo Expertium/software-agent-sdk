@@ -552,12 +552,13 @@ class EventService:
         body: str | None,
         timestamp_gte_str: str | None,
         timestamp_lt_str: str | None,
+        exclude_kinds: set[str] | None = None,
     ) -> bool:
         """Return True if ``event`` matches all of the provided filters."""
-        if (
-            kind is not None
-            and f"{event.__class__.__module__}.{event.__class__.__name__}" != kind
-        ):
+        event_kind = f"{event.__class__.__module__}.{event.__class__.__name__}"
+        if kind is not None and event_kind != kind:
+            return False
+        if exclude_kinds and event_kind in exclude_kinds:
             return False
         if source is not None and event.source != source:
             return False
@@ -593,6 +594,7 @@ class EventService:
         sort_order: EventSortOrder = EventSortOrder.TIMESTAMP,
         timestamp__gte: datetime | None = None,
         timestamp__lt: datetime | None = None,
+        exclude_kinds: set[str] | None = None,
     ) -> EventPage:
         """Private sync function to search events.
 
@@ -654,7 +656,13 @@ class EventService:
             if event is None:
                 continue
             if not self._event_matches_filters(
-                event, kind, source, body, timestamp_gte_str, timestamp_lt_str
+                event,
+                kind,
+                source,
+                body,
+                timestamp_gte_str,
+                timestamp_lt_str,
+                exclude_kinds,
             ):
                 continue
             if len(items) >= limit:
@@ -674,6 +682,7 @@ class EventService:
         sort_order: EventSortOrder = EventSortOrder.TIMESTAMP,
         timestamp__gte: datetime | None = None,
         timestamp__lt: datetime | None = None,
+        exclude_kinds: set[str] | None = None,
     ) -> EventPage:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
@@ -687,6 +696,7 @@ class EventService:
             sort_order,
             timestamp__gte,
             timestamp__lt,
+            exclude_kinds,
         )
 
     def _count_events_sync(

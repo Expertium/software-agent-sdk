@@ -290,6 +290,21 @@ class TestEventServiceSearchEvents:
         assert len(result.items) == 0
 
     @pytest.mark.asyncio
+    async def test_search_events_excludes_event_kinds_from_page(
+        self, event_service, mock_conversation_with_events
+    ):
+        event_service._conversation = mock_conversation_with_events
+
+        result = await event_service.search_events(
+            limit=2,
+            sort_order=EventSortOrder.TIMESTAMP_DESC,
+            exclude_kinds={"openhands.sdk.event.llm_convertible.message.MessageEvent"},
+        )
+
+        assert result.items == []
+        assert result.next_page_id is None
+
+    @pytest.mark.asyncio
     async def test_search_events_sorting(
         self, event_service, mock_conversation_with_events
     ):

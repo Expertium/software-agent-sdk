@@ -552,6 +552,23 @@ describe('Auxiliary API clients', () => {
     );
   });
 
+  it('RemoteEventsList serializes excluded event kinds as repeated query parameters', async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [], next_page_id: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    ) as typeof fetch;
+
+    const events = new RemoteEventsList({ baseUrl: 'http://example.com' }, 'c1');
+    await events.search({ exclude_kind: ['internal.EventA', 'internal.EventB'] });
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://example.com/api/conversations/c1/events/search?limit=100&exclude_kind=internal.EventA&exclude_kind=internal.EventB',
+      expect.objectContaining({ method: 'GET' })
+    );
+  });
+
   it('ConversationClient.switchLLM posts an explicit LLM config', async () => {
     global.fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ success: true }), {
