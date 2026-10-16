@@ -1034,6 +1034,9 @@ export type Action =
       kind: 'openhands__tools__terminal__definition__TerminalAction-Output__1';
     } & TerminalAction)
   | ({
+      kind: 'openhands__tools__terminal__recovery__TerminalRecoverAction-Output__1';
+    } & TerminalRecoverAction)
+  | ({
       kind: 'openhands__tools__workflow__definition__WorkflowAction-Output__1';
     } & WorkflowAction);
 
@@ -9720,6 +9723,9 @@ export type Observation =
       kind: 'openhands__tools__terminal__definition__TerminalObservation-Output__1';
     } & TerminalObservation)
   | ({
+      kind: 'openhands__tools__terminal__recovery__TerminalRecoverObservation-Output__1';
+    } & TerminalRecoverObservation)
+  | ({
       kind: 'openhands__tools__workflow__definition__WorkflowObservation-Output__1';
     } & WorkflowObservation);
 
@@ -10012,8 +10018,10 @@ export type PathTrigger = {
  * Catch dangerous agent actions through deterministic signature scanning.
  *
  * Use this when you want fast, local, no-network threat detection at the
- * action boundary. It returns ``SecurityRisk.HIGH``, ``MEDIUM``, or ``LOW``
- * -- pair it with ``ConfirmRisky`` to decide what gets confirmed.
+ * action boundary. It returns ``SecurityRisk.HIGH``, ``MEDIUM``, or ``LOW``.
+ * It returns ``UNKNOWN`` when the shell scan cannot resolve relevant
+ * destructive structure. Pair it with ``ConfirmRisky`` to decide what gets
+ * confirmed.
  *
  * The key design choice: shell-destructive patterns only scan what the
  * agent will *execute* (tool arguments), never what it *thought about*
@@ -10067,8 +10075,10 @@ export type PatternSecurityAnalyzerInput = {
  * Catch dangerous agent actions through deterministic signature scanning.
  *
  * Use this when you want fast, local, no-network threat detection at the
- * action boundary. It returns ``SecurityRisk.HIGH``, ``MEDIUM``, or ``LOW``
- * -- pair it with ``ConfirmRisky`` to decide what gets confirmed.
+ * action boundary. It returns ``SecurityRisk.HIGH``, ``MEDIUM``, or ``LOW``.
+ * It returns ``UNKNOWN`` when the shell scan cannot resolve relevant
+ * destructive structure. Pair it with ``ConfirmRisky`` to decide what gets
+ * confirmed.
  *
  * The key design choice: shell-destructive patterns only scan what the
  * agent will *execute* (tool arguments), never what it *thought about*
@@ -10529,20 +10539,21 @@ export type PluginsResponse = {
 /**
  * PolicyRailSecurityAnalyzer
  *
- * Catch composed threats that plain regex signatures would miss.
+ * Catch threats defined by shell command structure.
  *
- * Use this when you need to detect threats defined by *combinations*
- * of tokens (e.g., ``curl`` piped to ``bash``) rather than individual
- * signatures. While these rails *could* each be expressed as a single
- * regex, keeping them as named rules with per-segment evaluation makes
- * the threat model more interpretable, the rules easier to maintain,
- * and the audit trail clearer than a flat pattern list.
+ * Named rails use shell syntax to detect dangerous operations, such as a
+ * network fetch piped to a downstream command. Per-segment evaluation keeps
+ * the threat model interpretable and prevents text from separate fields from
+ * forming one match.
  *
- * Evaluates normalized executable segments only -- reasoning text is
- * never scanned.
+ * Evaluates original executable segments only -- reasoning text is never
+ * scanned.
  *
- * Returns ``SecurityRisk.HIGH`` when a rail fires, ``LOW`` otherwise.
- * Pair with ``ConfirmRisky`` and compose via ``EnsembleSecurityAnalyzer``.
+ * Returns ``SecurityRisk.HIGH`` when a rail fires and ``UNKNOWN`` when a
+ * relevant shell structure cannot be resolved. ``LOW`` means that no
+ * configured rail matched and no relevant uncertainty remained. It does not
+ * establish general safety or authorization. Pair with ``ConfirmRisky`` and
+ * compose via ``EnsembleSecurityAnalyzer``.
  *
  * v1 rails: fetch-to-exec, raw-disk-op, catastrophic-delete.
  *
@@ -10563,20 +10574,21 @@ export type PolicyRailSecurityAnalyzerInput = {
 /**
  * PolicyRailSecurityAnalyzer
  *
- * Catch composed threats that plain regex signatures would miss.
+ * Catch threats defined by shell command structure.
  *
- * Use this when you need to detect threats defined by *combinations*
- * of tokens (e.g., ``curl`` piped to ``bash``) rather than individual
- * signatures. While these rails *could* each be expressed as a single
- * regex, keeping them as named rules with per-segment evaluation makes
- * the threat model more interpretable, the rules easier to maintain,
- * and the audit trail clearer than a flat pattern list.
+ * Named rails use shell syntax to detect dangerous operations, such as a
+ * network fetch piped to a downstream command. Per-segment evaluation keeps
+ * the threat model interpretable and prevents text from separate fields from
+ * forming one match.
  *
- * Evaluates normalized executable segments only -- reasoning text is
- * never scanned.
+ * Evaluates original executable segments only -- reasoning text is never
+ * scanned.
  *
- * Returns ``SecurityRisk.HIGH`` when a rail fires, ``LOW`` otherwise.
- * Pair with ``ConfirmRisky`` and compose via ``EnsembleSecurityAnalyzer``.
+ * Returns ``SecurityRisk.HIGH`` when a rail fires and ``UNKNOWN`` when a
+ * relevant shell structure cannot be resolved. ``LOW`` means that no
+ * configured rail matched and no relevant uncertainty remained. It does not
+ * establish general safety or authorization. Pair with ``ConfirmRisky`` and
+ * compose via ``EnsembleSecurityAnalyzer``.
  *
  * v1 rails: fetch-to-exec, raw-disk-op, catastrophic-delete.
  *
@@ -13278,9 +13290,9 @@ export type TerminalAction = {
   /**
    * Timeout
    *
-   * Optional. Sets a maximum time limit (in seconds) for running the command. If the command takes longer than this limit, you’ll be asked whether to continue or stop it. If you don’t set a value, the command will instead pause and ask for confirmation when it produces no new output for 30 seconds. Use a higher value if the command is expected to take a long time (like installation or testing), or if it has a known fixed duration (like sleep).
+   * Maximum time in seconds to wait for this terminal action, including waiting for a terminal session. Must be between 5 and 300 seconds. Defaults to 15 seconds.
    */
-  timeout?: number | null;
+  timeout?: number;
 };
 
 /**
@@ -13333,6 +13345,83 @@ export type TerminalObservation = {
    * Whether the command execution timed out.
    */
   timeout?: boolean;
+};
+
+/**
+ * TerminalRecoverAction
+ *
+ * Request interruption and replacement of the shared terminal session.
+ */
+export type TerminalRecoverAction = {
+  /**
+   * Kind
+   */
+  kind: 'TerminalRecoverAction';
+  /**
+   * Reason
+   *
+   * Why the terminal session needs to be recovered.
+   */
+  reason?: string;
+};
+
+/**
+ * TerminalRecoverObservation
+ *
+ * Result of attempting to recover a terminal session.
+ */
+export type TerminalRecoverObservation = {
+  /**
+   * Content
+   *
+   * Content returned from the tool as a list of TextContent/ImageContent objects. When there is an error, it should be written in this field.
+   */
+  content?: Array<TextContent | ImageContent>;
+  /**
+   * Is Error
+   *
+   * Whether the observation indicates an error
+   */
+  is_error?: boolean;
+  /**
+   * Kind
+   */
+  kind: 'TerminalRecoverObservation';
+};
+
+/**
+ * TerminalRecoverTool
+ *
+ * Force-reset the shared terminal session when it becomes unresponsive.
+ */
+export type TerminalRecoverTool = {
+  /**
+   * Action Type
+   */
+  action_type: string;
+  annotations?: OpenhandsSdkToolToolToolAnnotations | null;
+  /**
+   * Description
+   */
+  description: string;
+  /**
+   * Kind
+   */
+  kind: 'TerminalRecoverTool';
+  /**
+   * Meta
+   */
+  meta?: {
+    [key: string]: unknown;
+  } | null;
+  /**
+   * Observation Type
+   */
+  observation_type?: string | null;
+  /**
+   * Title
+   */
+  readonly title: string;
 };
 
 /**
@@ -13811,6 +13900,9 @@ export type ToolDefinition =
   | ({
       kind: 'openhands__tools__terminal__definition__TerminalTool-Output__1';
     } & TerminalTool)
+  | ({
+      kind: 'openhands__tools__terminal__recovery__TerminalRecoverTool-Output__1';
+    } & TerminalRecoverTool)
   | ({
       kind: 'openhands__tools__workflow__definition__WorkflowTool-Output__1';
     } & WorkflowTool)
@@ -20026,6 +20118,37 @@ export type TelemetrySpecWritable = {
 };
 
 /**
+ * TerminalRecoverTool
+ *
+ * Force-reset the shared terminal session when it becomes unresponsive.
+ */
+export type TerminalRecoverToolWritable = {
+  /**
+   * Action Type
+   */
+  action_type: string;
+  annotations?: OpenhandsSdkToolToolToolAnnotations | null;
+  /**
+   * Description
+   */
+  description: string;
+  /**
+   * Kind
+   */
+  kind: 'TerminalRecoverTool';
+  /**
+   * Meta
+   */
+  meta?: {
+    [key: string]: unknown;
+  } | null;
+  /**
+   * Observation Type
+   */
+  observation_type?: string | null;
+};
+
+/**
  * TerminalTool
  *
  * A ToolDefinition subclass that automatically initializes a TerminalExecutor with auto-detection.
@@ -20196,6 +20319,9 @@ export type ToolDefinitionWritable =
   | ({
       kind: 'openhands__tools__terminal__definition__TerminalTool-Output__1';
     } & TerminalToolWritable)
+  | ({
+      kind: 'openhands__tools__terminal__recovery__TerminalRecoverTool-Output__1';
+    } & TerminalRecoverToolWritable)
   | ({
       kind: 'openhands__tools__workflow__definition__WorkflowTool-Output__1';
     } & WorkflowToolWritable)
@@ -22203,6 +22329,10 @@ export type SearchConversationEventsApiConversationsConversationIdEventsSearchGe
      * Optional filter by event kind/type (e.g., ActionEvent, MessageEvent)
      */
     kind?: string | null;
+    /**
+     * Event kinds to omit from the results
+     */
+    exclude_kind?: Array<string> | null;
     /**
      * Optional filter by event source (e.g., agent, user, environment)
      */
