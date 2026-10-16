@@ -27,6 +27,7 @@ from openhands.agent_server.session_protocol import (
     MAX_PENDING_BYTES,
     DeltaFrame,
     DurableFrame,
+    DurableReferenceFrame,
     ErrorFrame,
     ItemAbortedFrame,
     ItemStartedFrame,
@@ -76,6 +77,7 @@ class _ConnectionWriter:
     websocket: WebSocket
     max_frame_bytes: int = MAX_FRAME_BYTES
     max_pending_bytes: int = MAX_PENDING_BYTES
+    supports_durable_references: bool = False
 
     closed_event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     drop_reason: str | None = field(default=None, init=False)
@@ -101,14 +103,33 @@ class _ConnectionWriter:
         size = len(payload.encode("utf-8"))
 
         if size > self.max_frame_bytes:
-            # Worth shouting about: it means the frame budget needs revisiting.
-            logger.warning(
-                "session_socket_frame_too_large: %d bytes > %d",
-                size,
-                self.max_frame_bytes,
-            )
-            self._fail("frame_too_large")
-            return False
+            if isinstance(frame, DurableFrame) and self.supports_durable_references:
+                payload = DurableReferenceFrame(
+                    seq=frame.seq,
+                    event_id=frame.event.id,
+                ).model_dump_json(exclude_none=True)
+                size = len(payload.encode("utf-8"))
+                logger.warning(
+                    "session_socket_event_reference: seq=%d event_id=%s bytes=%d",
+                    frame.seq,
+                    frame.event.id,
+                    size,
+                )
+                if self._pending_bytes + size > self.max_pending_bytes:
+                    self._fail("slow_consumer")
+                    return False
+                self._queue.append((payload, size))
+                self._pending_bytes += size
+                self._wake.set()
+                return True
+            else:
+                logger.warning(
+                    "session_socket_frame_too_large: %d bytes > %d",
+                    size,
+                    self.max_frame_bytes,
+                )
+                self._fail("frame_too_large")
+                return False
 
         if self._pending_bytes + size > self.max_pending_bytes:
             logger.info(
@@ -327,6 +348,15 @@ async def session_socket(
             )
         ),
     ] = None,
+    durable_references: Annotated[
+        bool,
+        Query(
+            description=(
+                "Accept durable_reference frames for persisted events that exceed "
+                "the frame limit. When false, the socket retains legacy close behavior."
+            )
+        ),
+    ] = False,
 ):
     """Session socket: durable events in an envelope, on one ordered channel."""
     if not await _accept_authenticated_websocket(websocket, session_api_key):
@@ -358,7 +388,9 @@ async def session_socket(
         )
         return
 
-    writer = _ConnectionWriter(websocket)
+    writer = _ConnectionWriter(
+        websocket, supports_durable_references=durable_references
+    )
     writer.start()
     subscriber = _SessionSubscriber(writer=writer, events=events)
 
@@ -402,7 +434,13 @@ async def session_socket(
         length = len(events)
         through_seq = length - 1 if length else None
 
-        if not writer.send(SyncFrame(from_seq=after_seq, through_seq=through_seq)):
+        if not writer.send(
+            SyncFrame(
+                from_seq=after_seq,
+                through_seq=through_seq,
+                durable_references=durable_references,
+            )
+        ):
             return
 
         replayed = False

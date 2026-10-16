@@ -457,6 +457,73 @@ async def test_session_socket_durable_frame_carries_seq_over_the_wire(agent_serv
 
 
 @pytest.mark.asyncio
+async def test_session_socket_references_oversized_durable_events_when_opted_in(
+    agent_server,
+):
+    port, api_key = agent_server["port"], agent_server["api_key"]
+    conversation_id = _create_conversation(port, api_key)
+    marker = f"oversized-event-{uuid4()}"
+    payload = marker + ("x" * (4 * 1024 * 1024 + 1))
+    response = requests.post(
+        f"http://127.0.0.1:{port}/api/conversations/{conversation_id}/events",
+        headers={"X-Session-API-Key": api_key},
+        json={
+            "role": "user",
+            "content": [{"type": "text", "text": payload}],
+            "run": False,
+        },
+        timeout=30,
+    )
+    assert response.status_code == 200, response.text
+    history = requests.get(
+        f"http://127.0.0.1:{port}/api/conversations/{conversation_id}/events/search",
+        headers={"X-Session-API-Key": api_key},
+        params={"limit": 100, "sort_order": "TIMESTAMP_DESC"},
+        timeout=30,
+    )
+    assert history.status_code == 200, history.text
+    event = next(
+        event for event in history.json()["items"] if marker in json.dumps(event)
+    )
+    event_id = event["id"]
+    event_response = requests.get(
+        f"http://127.0.0.1:{port}/api/conversations/{conversation_id}/events/{event_id}",
+        headers={"X-Session-API-Key": api_key},
+        timeout=30,
+    )
+    assert event_response.status_code == 200, event_response.text
+
+    ws_url = (
+        f"ws://127.0.0.1:{port}/sockets/session/{conversation_id}"
+        f"?session_api_key={api_key}&after_seq=-1&durable_references=true"
+    )
+    async with websockets.connect(ws_url, open_timeout=5) as ws:
+        sync = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+        assert sync["type"] == "sync"
+        assert sync["durable_references"] is True
+        frames = await _collect_frames(
+            ws,
+            until=lambda frame: frame.get("type") == "durable_reference"
+            and frame.get("event_id") == event_id,
+        )
+        received = [sync, *frames]
+
+    assert any(
+        frame.get("type") == "durable_reference"
+        and frame.get("event_id") == event_id
+        and isinstance(frame.get("seq"), int)
+        for frame in frames
+    )
+    reference = next(
+        frame
+        for frame in received
+        if frame.get("type") == "durable_reference"
+        and frame.get("event_id") == event_id
+    )
+    assert len(json.dumps(reference).encode()) < 1024
+
+
+@pytest.mark.asyncio
 async def test_session_socket_resumes_history_with_after_seq(agent_server):
     """Reconnecting with ``after_seq`` replays from disk and loses nothing."""
     port, api_key = agent_server["port"], agent_server["api_key"]

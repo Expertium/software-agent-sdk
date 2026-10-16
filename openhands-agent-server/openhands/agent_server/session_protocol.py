@@ -32,7 +32,7 @@ from openhands.sdk import Event
 # distribution, which has not been done yet. Do not treat these as tuned.
 
 MAX_FRAME_BYTES: Final[int] = 4 * 1024 * 1024
-"""Largest frame the server will emit; a bigger one drops the connection."""
+"""Largest frame the server will emit."""
 
 MAX_PENDING_BYTES: Final[int] = 4 * MAX_FRAME_BYTES
 """Per-connection write budget. Over it, the connection is dropped."""
@@ -66,6 +66,7 @@ class SyncFrame(SessionFrameBase):
             "established; everything above it arrives live. None if empty."
         ),
     )
+    durable_references: bool = False
 
 
 class DurableFrame(SessionFrameBase):
@@ -78,6 +79,14 @@ class DurableFrame(SessionFrameBase):
     type: Literal["durable"] = "durable"
     seq: int
     event: Event
+
+
+class DurableReferenceFrame(SessionFrameBase):
+    """A persisted event whose complete payload must be fetched over REST."""
+
+    type: Literal["durable_reference"] = "durable_reference"
+    seq: int
+    event_id: str
 
 
 class TransientFrame(SessionFrameBase):
@@ -157,6 +166,7 @@ class ErrorFrame(SessionFrameBase):
 SessionFrame = Annotated[
     SyncFrame
     | DurableFrame
+    | DurableReferenceFrame
     | TransientFrame
     | ItemStartedFrame
     | DeltaFrame
