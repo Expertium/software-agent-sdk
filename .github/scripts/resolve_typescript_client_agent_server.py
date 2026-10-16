@@ -13,17 +13,11 @@ import json
 import os
 import re
 import tomllib
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 
 IMAGE_RE = re.compile(
     r"^ghcr\.io/openhands/agent-server:(?P<version>\d+\.\d+\.\d+)-python$"
-)
-OPENAPI_URL = (
-    "https://github.com/OpenHands/software-agent-sdk/releases/download/"
-    "v{version}/openapi.json"
 )
 
 
@@ -42,25 +36,13 @@ def source_version(pyproject: Path) -> str:
     return tomllib.loads(pyproject.read_text())["project"]["version"]
 
 
-def contract_published(version: str) -> bool:
-    try:
-        with urllib.request.urlopen(OPENAPI_URL.format(version=version), timeout=30):
-            return True
-    except urllib.error.HTTPError as exc:
-        # Anything other than 404 is a transient failure, not "unreleased".
-        if exc.code == 404:
-            return False
-        raise
-
-
 def resolve(client_root: Path, pyproject: Path) -> dict[str, str]:
     pinned = pinned_version(client_root)
     pinned_is_source = pinned == source_version(pyproject)
-    use_source = pinned_is_source and not contract_published(pinned)
     return {
         "pinned_version": pinned,
         "pinned_is_source": str(pinned_is_source).lower(),
-        "use_source_contract": str(use_source).lower(),
+        "use_source_contract": str(pinned_is_source).lower(),
     }
 
 
