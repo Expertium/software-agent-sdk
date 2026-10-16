@@ -354,6 +354,21 @@ class TestSendMessageEndpoint:
         assert message.content == content
 
 
+class TestGetConversationEventEndpoint:
+    def test_unknown_event_returns_404(
+        self, client, sample_conversation_id, mock_event_service
+    ):
+        mock_event_service.get_event = AsyncMock(return_value=None)
+        client.app.dependency_overrides[get_event_service] = lambda: mock_event_service
+        try:
+            response = client.get(
+                f"/api/conversations/{sample_conversation_id}/events/missing-event"
+            )
+            assert response.status_code == 404
+        finally:
+            client.app.dependency_overrides.clear()
+
+
 class TestSearchEventsEndpoint:
     """Test cases for the search events endpoint with timestamp filtering."""
 

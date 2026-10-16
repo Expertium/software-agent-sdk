@@ -283,6 +283,41 @@ async def test_oversized_durable_event_is_sent_as_a_reference():
         }
     ]
     assert len(ws.sent[0].encode("utf-8")) < 1024
+
+
+@pytest.mark.asyncio
+async def test_durable_reference_retires_matching_started_item():
+    ws, log = _FakeWebSocket(), _FakeEventLog()
+    writer = _ConnectionWriter(ws, supports_durable_references=True)  # type: ignore[arg-type]
+    writer.start()
+    progress = _ProgressSubscriber(writer)
+    sub = _SessionSubscriber(writer=writer, events=log)  # type: ignore[arg-type]
+    sub.go_live(None)
+
+    huge = MessageEvent(
+        source="agent",
+        llm_message=Message(
+            role="assistant",
+            content=[TextContent(text="x" * (MAX_FRAME_BYTES + 1))],
+        ),
+    )
+    seq = log.add(huge)
+
+    await progress(StreamStarted(item_id=huge.id, attempt=1, anchor_seq=None))
+    await sub(huge)
+    await _drain(writer)
+    await writer.aclose()
+
+    started, reference = ws.frames()
+    assert started["type"] == "item_started"
+    assert started["item_id"] == huge.id
+    assert reference == {
+        "type": "durable_reference",
+        "seq": seq,
+        "event_id": huge.id,
+    }
+    assert reference["event_id"] == started["item_id"]
+
     await writer.aclose()
 
 

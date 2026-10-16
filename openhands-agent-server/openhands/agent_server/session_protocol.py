@@ -14,11 +14,15 @@ Delivery rules:
    of blocking the publisher.
 2. ``Delta`` may be dropped freely; a gap marks the slot lossy and the real
    text arrives with the durable message.
-3. Every ``ItemStarted`` is retired by exactly one ``Durable`` or
-   ``ItemAborted``. ``item_id`` *is* the finished message's ``Event.id``, so a
-   client closes a slot on ``frame.event.id == slot.item_id``.
-4. Progress frames are never replayed.
-5. No ordering is promised between two open items.
+3. Every ``ItemStarted`` is retired by exactly one ``Durable``,
+   ``DurableReference``, or ``ItemAborted``. ``item_id`` *is* the finished
+   message's ``Event.id``; clients close a slot when either
+   ``frame.event.id`` or ``frame.event_id`` equals ``slot.item_id``.
+4. ``DurableReference`` is sent only when the client opts in and a persisted
+   event exceeds the frame limit. It carries the event's ``seq`` and ``event_id``;
+   the client fetches its full payload from ``GET /events/{event_id}``.
+5. Progress frames are never replayed.
+6. No ordering is promised between two open items.
 """
 
 from typing import Annotated, Final, Literal
