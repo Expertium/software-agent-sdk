@@ -106,6 +106,7 @@ from openhands.agent_server.tool_router import tool_router
 from openhands.agent_server.vscode_router import vscode_router
 from openhands.agent_server.vscode_service import get_vscode_service
 from openhands.agent_server.workspaces_router import workspaces_router
+from openhands.sdk.conversation.exceptions import ClientMessageIDConflict
 from openhands.sdk.logger import DEBUG, get_logger
 from openhands.sdk.tool.registry import seal_tool_catalog, unseal_tool_catalog
 from openhands.sdk.utils.redact import sanitize_dict
@@ -609,6 +610,12 @@ def _add_exception_handlers(api: FastAPI) -> None:
         _request: Request, exc: ConversationRunLimitExceeded
     ) -> JSONResponse:
         return JSONResponse(status_code=429, content={"detail": str(exc)})
+
+    @api.exception_handler(ClientMessageIDConflict)
+    async def _client_message_id_conflict_handler(
+        _request: Request, exc: ClientMessageIDConflict
+    ) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     @api.exception_handler(CredentialBindingActivationRequired)
     async def _credential_binding_activation_required_handler(

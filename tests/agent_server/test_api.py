@@ -698,6 +698,20 @@ class TestHttpExceptionLogging:
 
         return app
 
+    def test_client_message_id_conflict_returns_409(self):
+        from openhands.sdk.conversation.exceptions import ClientMessageIDConflict
+
+        app = create_app(Config(static_files_path=None))
+
+        @app.get("/__test__/client-message-conflict")
+        def _raise_conflict():
+            raise ClientMessageIDConflict("client_message_id is already in use")
+
+        response = TestClient(app).get("/__test__/client-message-conflict")
+
+        assert response.status_code == 409
+        assert response.json() == {"detail": "client_message_id is already in use"}
+
     def test_5xx_http_exception_logged_without_traceback_by_default(self, caplog):
         import logging
 

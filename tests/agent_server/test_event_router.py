@@ -192,6 +192,32 @@ class TestSendMessageEndpoint:
             client.app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
+    async def test_send_message_preserves_client_message_id(
+        self, client, sample_conversation_id, mock_event_service
+    ):
+        client.app.dependency_overrides[get_event_service] = lambda: mock_event_service
+        client_message_id = uuid4()
+        try:
+            response = client.post(
+                f"/api/conversations/{sample_conversation_id}/events",
+                json={
+                    "role": "user",
+                    "content": [{"type": "text", "text": "retry me"}],
+                    "client_message_id": str(client_message_id),
+                },
+            )
+
+            assert response.status_code == 200
+            message, run_flag = mock_event_service.send_message.call_args.args
+            assert message.content[0].text == "retry me"
+            assert run_flag is False
+            assert mock_event_service.send_message.call_args.kwargs == {
+                "client_message_id": str(client_message_id)
+            }
+        finally:
+            client.app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
     async def test_send_message_conversation_not_found(
         self, client, sample_conversation_id
     ):

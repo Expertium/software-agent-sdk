@@ -17,7 +17,10 @@ from openhands.sdk.context.prompts.prompt import render_template
 from openhands.sdk.conversation.base import BaseConversation
 from openhands.sdk.conversation.cancellation import CancellationToken
 from openhands.sdk.conversation.event_store import EventLog
-from openhands.sdk.conversation.exceptions import ConversationRunError
+from openhands.sdk.conversation.exceptions import (
+    ClientMessageIDConflict,
+    ConversationRunError,
+)
 from openhands.sdk.conversation.secret_registry import SecretValue
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
@@ -1804,16 +1807,22 @@ class LocalConversation(BaseConversation):
             }
 
     @observe(name="conversation.send_message")
-    def send_message(self, message: str | Message, sender: str | None = None) -> None:
+    def send_message(
+        self,
+        message: str | Message,
+        sender: str | None = None,
+        client_message_id: str | None = None,
+    ) -> bool | None:
         """Send a message to the agent.
 
         Args:
             message: Either a string (which will be converted to a user message)
                     or a Message object
-            sender: Optional identifier of the sender. Can be used to track
-                   message origin in multi-agent scenarios. For example, when
-                   one agent delegates to another, the sender can be set to
-                   identify which agent is sending the message.
+            sender: Optional identifier of the sender in multi-agent scenarios.
+            client_message_id: Stable UUID used to make retries idempotent.
+
+        Returns:
+            ``False`` when the identified message already exists; otherwise ``True``.
         """
         # ACPAgent startup can take much longer than a normal send_message()
         # round-trip because it launches and initializes a subprocess-backed
@@ -1829,6 +1838,25 @@ class LocalConversation(BaseConversation):
             "Only user messages are allowed to be sent to the agent."
         )
         with self._state:
+            if client_message_id is not None:
+                try:
+                    existing = self._state.events[
+                        self._state.events.get_index(client_message_id)
+                    ]
+                except KeyError:
+                    existing = None
+                if existing is not None:
+                    if (
+                        isinstance(existing, MessageEvent)
+                        and existing.source == "user"
+                        and existing.llm_message == message
+                        and existing.sender == sender
+                    ):
+                        return False
+                    raise ClientMessageIDConflict(
+                        f"client_message_id {client_message_id!r} is already in use"
+                    )
+
             if self._state.execution_status in (
                 ConversationExecutionStatus.FINISHED,
                 ConversationExecutionStatus.STUCK,
@@ -1860,6 +1888,7 @@ class LocalConversation(BaseConversation):
                     self._state.activated_knowledge_skills.extend(activated_skill_names)
 
             user_msg_event = MessageEvent(
+                id=client_message_id or str(uuid.uuid4()),
                 source="user",
                 llm_message=message,
                 activated_skills=activated_skill_names,
@@ -1867,6 +1896,7 @@ class LocalConversation(BaseConversation):
                 sender=sender,
             )
             self._on_event(user_msg_event)
+        return True if client_message_id is not None else None
 
     def _on_event_with_state_lock(self, event: Event) -> None:
         """Emit an event while holding the conversation state lock."""

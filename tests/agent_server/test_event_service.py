@@ -38,6 +38,7 @@ from openhands.sdk.conversation.impl.local_conversation import (
     ACP_SUPERSEDE_INFLIGHT_PROMPT,
     LocalConversation,
 )
+from openhands.sdk.conversation.request import SendMessageRequest
 from openhands.sdk.conversation.state import (
     ConversationExecutionStatus,
     ConversationState,
@@ -3174,7 +3175,7 @@ class TestEventServiceClose:
             def conversation_stats(self):
                 return mock.conversation_stats
 
-            def send_message(self, message, sender=None):
+            def send_message(self, message, sender=None, client_message_id=None):
                 pass
 
             def run(self):
@@ -3355,6 +3356,157 @@ async def test_subscribe_to_events_does_not_deadlock_on_wedged_subscriber(
         pytest.fail("subscribe_to_events blocked > 1 s on a wedged subscriber.")
     finally:
         wedged.unblock.set()
+
+
+@pytest.mark.timeout(30)
+async def test_send_message_with_client_id_persists_only_once(
+    real_conversation_service, tmp_path
+):
+    (tmp_path / "ws").mkdir()
+    info = await start_conversation_with_test_llm(
+        real_conversation_service,
+        parent_llm=SlowTestLLM.from_messages([], latency_s=0.0),
+        workspace_dir=str(tmp_path / "ws"),
+        usage_id="idempotent-client-message",
+        initial_text=None,
+    )
+    event_service = await real_conversation_service.get_event_service(info.id)
+    assert event_service is not None
+
+    message = Message(role="user", content=[TextContent(text="retry me")])
+    client_message_id = str(uuid4())
+    await event_service.send_message(
+        message, run=False, client_message_id=client_message_id
+    )
+    await event_service.close()
+    event_service = await real_conversation_service.get_event_service(info.id)
+    assert event_service is not None
+    await event_service.send_message(
+        message, run=False, client_message_id=client_message_id
+    )
+
+    page = await event_service.search_events(
+        kind="openhands.sdk.event.llm_convertible.message.MessageEvent",
+        source="user",
+        body="retry me",
+    )
+    assert len(page.items) == 1
+    assert isinstance(page.items[0], MessageEvent)
+    assert page.items[0].id == client_message_id
+
+    conversation = event_service.get_conversation()
+    assert conversation is not None
+    with conversation._state:
+        conversation._state.execution_status = ConversationExecutionStatus.FINISHED
+
+    run_calls = 0
+    original_run = event_service.run
+
+    async def count_run(*args, **kwargs):
+        nonlocal run_calls
+        run_calls += 1
+        return await original_run(*args, **kwargs)
+
+    event_service.run = count_run
+    await event_service.send_message(
+        message, run=True, client_message_id=client_message_id
+    )
+    assert run_calls == 0
+
+    with pytest.raises(ValueError, match="already in use"):
+        await event_service.send_message(
+            Message(role="user", content=[TextContent(text="different")]),
+            run=False,
+            client_message_id=client_message_id,
+        )
+
+
+@pytest.mark.timeout(30)
+async def test_send_message_request_id_survives_event_service_reload(
+    real_conversation_service, tmp_path
+):
+    workspace_dir = tmp_path / "ws"
+    workspace_dir.mkdir()
+    info = await start_conversation_with_test_llm(
+        real_conversation_service,
+        parent_llm=SlowTestLLM.from_messages([], latency_s=0.0),
+        workspace_dir=str(workspace_dir),
+        usage_id="idempotent-request-reload",
+        initial_text=None,
+    )
+    event_service = await real_conversation_service.get_event_service(info.id)
+    assert event_service is not None
+    request = SendMessageRequest(
+        content=[TextContent(text="request retry")],
+        client_message_id=uuid4(),
+    )
+
+    await event_service.send_message(
+        request.create_message(), client_message_id=str(request.client_message_id)
+    )
+    await event_service.close()
+    event_service = await real_conversation_service.get_event_service(info.id)
+    assert event_service is not None
+    await event_service.send_message(
+        request.create_message(), client_message_id=str(request.client_message_id)
+    )
+
+    page = await event_service.search_events(
+        kind="openhands.sdk.event.llm_convertible.message.MessageEvent",
+        source="user",
+        body="request retry",
+    )
+    assert len(page.items) == 1
+    assert isinstance(page.items[0], MessageEvent)
+    assert page.items[0].id == str(request.client_message_id)
+
+
+@pytest.mark.timeout(30)
+async def test_event_route_retries_are_idempotent_and_conflicts_return_409(
+    real_conversation_service, tmp_path
+):
+    from fastapi.testclient import TestClient
+
+    from openhands.agent_server.api import create_app
+    from openhands.agent_server.config import Config
+    from openhands.agent_server.dependencies import get_conversation_service
+
+    workspace_dir = tmp_path / "ws"
+    workspace_dir.mkdir()
+    info = await start_conversation_with_test_llm(
+        real_conversation_service,
+        parent_llm=SlowTestLLM.from_messages([], latency_s=0.0),
+        workspace_dir=str(workspace_dir),
+        usage_id="idempotent-event-route",
+        initial_text=None,
+    )
+    request_id = str(uuid4())
+    app = create_app(Config(session_api_keys=[]))
+    app.dependency_overrides[get_conversation_service] = (
+        lambda: real_conversation_service
+    )
+    payload = {
+        "content": [{"type": "text", "text": "once"}],
+        "client_message_id": request_id,
+        "run": False,
+    }
+
+    with TestClient(app) as client:
+        url = f"/api/conversations/{info.id}/events"
+        first = client.post(url, json=payload)
+        retry = client.post(url, json=payload)
+        conflict = client.post(
+            url,
+            json={
+                **payload,
+                "content": [{"type": "text", "text": "different"}],
+            },
+        )
+
+    assert first.status_code == 200
+    assert retry.status_code == 200
+    assert conflict.status_code == 409
+    assert request_id in conflict.json()["detail"]
 
 
 @pytest.mark.timeout(45)
