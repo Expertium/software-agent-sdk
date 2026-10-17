@@ -83,6 +83,10 @@ async def search_conversation_events(
             title="Optional filter by event kind/type (e.g., ActionEvent, MessageEvent)"
         ),
     ] = None,
+    exclude_kind: Annotated[
+        list[str] | None,
+        Query(title="Event kinds to omit from the results"),
+    ] = None,
     source: Annotated[
         str | None,
         Query(title="Optional filter by event source (e.g., agent, user, environment)"),
@@ -118,7 +122,15 @@ async def search_conversation_events(
     )
 
     page = await event_service.search_events(
-        page_id, limit, kind, source, body, sort_order, normalized_gte, normalized_lt
+        page_id,
+        limit,
+        kind,
+        source,
+        body,
+        sort_order,
+        normalized_gte,
+        normalized_lt,
+        set(exclude_kind) if exclude_kind else None,
     )
     if isinstance(page, dict):
         items = cast(list[Any], page.get("items", []))

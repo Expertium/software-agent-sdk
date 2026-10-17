@@ -21,6 +21,8 @@ export interface EventSearchOptions {
   page_id?: string;
   /** Filter by event kind/type (e.g., ActionEvent, MessageEvent) */
   kind?: string;
+  /** Event kinds to omit from results */
+  exclude_kind?: string[];
   /** Filter by event source (e.g., agent, user, environment) */
   source?: string;
   /** Filter by message content (case-insensitive) */
@@ -58,6 +60,7 @@ export class RemoteEventsList {
 
     if (options.page_id) params.page_id = options.page_id;
     if (options.kind) params.kind = options.kind;
+    if (options.exclude_kind) params.exclude_kind = options.exclude_kind;
     if (options.source) params.source = options.source;
     if (options.body) params.body = options.body;
     if (options.sort_order) params.sort_order = options.sort_order;

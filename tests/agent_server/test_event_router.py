@@ -683,6 +683,30 @@ class TestSearchEventsEndpoint:
             client.app.dependency_overrides.clear()
 
     @pytest.mark.asyncio
+    async def test_search_events_excludes_requested_kinds(
+        self, client, sample_conversation_id, mock_event_service
+    ):
+        client.app.dependency_overrides[get_event_service] = lambda: mock_event_service
+        mock_event_service.search_events = AsyncMock(
+            return_value={"items": [], "next_page_id": None}
+        )
+
+        response = client.get(
+            f"/api/conversations/{sample_conversation_id}/events/search",
+            params=[
+                ("exclude_kind", "internal.EventA"),
+                ("exclude_kind", "internal.EventB"),
+            ],
+        )
+
+        assert response.status_code == 200
+        assert mock_event_service.search_events.call_args.args[8] == {
+            "internal.EventA",
+            "internal.EventB",
+        }
+        client.app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
     async def test_search_events_with_source_filter_real_events(
         self, client, sample_conversation_id
     ):
