@@ -66,6 +66,12 @@ class SendMessageRequest(BaseModel):
 
     role: Literal["user", "system", "assistant", "tool"] = "user"
     content: list[TextContent | ImageContent] = Field(default_factory=list)
+    client_message_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Stable client UUID used to make retried user-message requests idempotent."
+        ),
+    )
     run: bool = Field(
         default=False,
         description="Whether the agent loop should automatically run if not running",

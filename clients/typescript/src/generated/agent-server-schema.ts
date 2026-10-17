@@ -11377,6 +11377,12 @@ export type SecurityRisk = 'UNKNOWN' | 'LOW' | 'MEDIUM' | 'HIGH';
  */
 export type SendMessageRequest = {
   /**
+   * Client Message Id
+   *
+   * Stable client UUID used to make retried user-message requests idempotent.
+   */
+  client_message_id?: string | null;
+  /**
    * Content
    */
   content?: Array<TextContent | ImageContent>;
@@ -22183,6 +22189,10 @@ export type SendMessageApiConversationsConversationIdEventsPostData = {
 };
 
 export type SendMessageApiConversationsConversationIdEventsPostErrors = {
+  /**
+   * Client message ID was reused with different content
+   */
+  409: unknown;
   /**
    * Validation Error
    */

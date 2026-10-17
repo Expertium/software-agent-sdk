@@ -211,16 +211,22 @@ class BaseConversation(ABC):
     def conversation_stats(self) -> ConversationStats: ...
 
     @abstractmethod
-    def send_message(self, message: str | Message, sender: str | None = None) -> None:
-        """Send a message to the agent.
+    def send_message(
+        self,
+        message: str | Message,
+        sender: str | None = None,
+        client_message_id: str | None = None,
+    ) -> bool | None:
+        """Send a message and report whether an idempotent request was new.
+
+        A keyed send returns ``True`` when appended and ``False`` when it matches
+        an existing event. Calls without a client message ID return ``None``.
 
         Args:
             message: Either a string (which will be converted to a user message)
                     or a Message object
-            sender: Optional identifier of the sender. Can be used to track
-                   message origin in multi-agent scenarios. For example, when
-                   one agent delegates to another, the sender can be set to
-                   identify which agent is sending the message.
+            sender: Optional identifier of the sender in multi-agent scenarios.
+            client_message_id: Stable UUID used to make retries idempotent.
         """
         ...
 

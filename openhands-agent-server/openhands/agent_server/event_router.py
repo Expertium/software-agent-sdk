@@ -224,7 +224,10 @@ async def batch_get_conversation_events(
 
 @event_write_router.post(
     "",
-    responses={429: {"description": "Message saved but server run capacity is full"}},
+    responses={
+        409: {"description": "Client message ID was reused with different content"},
+        429: {"description": "Message saved but server run capacity is full"},
+    },
 )
 async def send_message(
     request: SendMessageRequest,
@@ -236,7 +239,13 @@ async def send_message(
     conversation's /run endpoint instead of resending the message.
     """
     message = Message(role=request.role, content=request.content)
-    await event_service.send_message(message, request.run)
+    await event_service.send_message(
+        message,
+        request.run,
+        client_message_id=(
+            str(request.client_message_id) if request.client_message_id else None
+        ),
+    )
     return Success()
 
 

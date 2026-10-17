@@ -870,9 +870,14 @@ class EventService:
         return results
 
     async def send_message(
-        self, message: Message, run: bool = False, _from_goal_loop: bool = False
+        self,
+        message: Message,
+        run: bool = False,
+        _from_goal_loop: bool = False,
+        client_message_id: str | None = None,
     ):
-        if not self._conversation:
+        conversation = self._conversation
+        if conversation is None:
             raise ValueError("inactive_service")
         # A normal user message supersedes any active /goal loop in this
         # conversation. The goal loop's own messages pass _from_goal_loop=True.
@@ -880,7 +885,19 @@ class EventService:
             await self.stop_goal_loop()
         explicit_interrupt_generation = self._explicit_interrupt_generation
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._conversation.send_message, message)
+        if client_message_id is None:
+            await loop.run_in_executor(None, conversation.send_message, message)
+            message_added = True
+        else:
+            message_added = await loop.run_in_executor(
+                None,
+                lambda: conversation.send_message(
+                    message, client_message_id=client_message_id
+                ),
+            )
+        if run and not message_added:
+            if await self._get_execution_status() != ConversationExecutionStatus.IDLE:
+                return
         if run:
             if self._explicit_interrupt_generation != explicit_interrupt_generation:
                 return

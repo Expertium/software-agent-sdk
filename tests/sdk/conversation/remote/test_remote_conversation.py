@@ -908,6 +908,17 @@ class TestRemoteConversation:
             "Should have made a POST call to events endpoint"
         )
 
+        client_message_id = str(uuid.uuid4())
+        conversation.send_message("Retry me", client_message_id=client_message_id)
+        request_calls = [
+            call
+            for call in mock_client_instance.request.call_args_list
+            if call[0][0] == "POST"
+            and f"/api/conversations/{conversation_id}/events" in call[0][1]
+        ]
+        payload = request_calls[-1][1]["json"]
+        assert payload["client_message_id"] == client_message_id
+
     @patch(
         "openhands.sdk.conversation.impl.remote_conversation.WebSocketCallbackClient"
     )

@@ -23,6 +23,10 @@ class WebSocketConnectionError(RuntimeError):
         super().__init__(message or default_msg)
 
 
+class ClientMessageIDConflict(ValueError):
+    """Raised when a client message ID is reused for different content."""
+
+
 class ConversationRunError(RuntimeError):
     """Raised when a conversation run fails.
 
